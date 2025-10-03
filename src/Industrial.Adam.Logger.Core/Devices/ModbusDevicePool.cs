@@ -79,8 +79,9 @@ public sealed class ModbusDevicePool : IDisposable
             return Task.FromResult(false);
         }
 
-        // Start polling for this device with improved task creation
-        _ = Task.Run(async () => await PollDeviceAsync(context).ConfigureAwait(false),
+        // Start polling for this device and track the task
+        context.PollingTask = Task.Run(
+            async () => await PollDeviceAsync(context).ConfigureAwait(false),
             context.CancellationTokenSource.Token);
 
         _logger.LogInformation(
@@ -122,7 +123,7 @@ public sealed class ModbusDevicePool : IDisposable
     }
 
     /// <summary>
-    /// Restart a device connection
+    /// Restart a device connection with proper synchronization to prevent race conditions
     /// </summary>
     public async Task<bool> RestartDeviceAsync(string deviceId, CancellationToken cancellationToken = default)
     {
@@ -135,21 +136,66 @@ public sealed class ModbusDevicePool : IDisposable
             return false;
         }
 
-        _logger.LogInformation("Restarting device {DeviceId}", deviceId);
+        // Acquire restart lock to prevent concurrent restarts of the same device
+        await context.RestartLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            _logger.LogInformation("Restarting device {DeviceId}", deviceId);
 
-        // Cancel current polling
-        await context.CancellationTokenSource.CancelAsync();
+            // Cancel old polling task
+            var oldCts = context.CancellationTokenSource;
+            await oldCts.CancelAsync().ConfigureAwait(false);
 
-        // Disconnect
-        await context.Connection.DisconnectAsync();
+            // Wait for old polling task to complete with timeout
+            if (context.PollingTask != null && !context.PollingTask.IsCompleted)
+            {
+                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-        // Create new cancellation token
-        context.CancellationTokenSource = new CancellationTokenSource();
+                try
+                {
+                    await context.PollingTask.WaitAsync(linkedCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Check which token was cancelled
+                    if (timeoutCts.IsCancellationRequested)
+                    {
+                        _logger.LogWarning(
+                            "Old polling task for device {DeviceId} did not complete within 5 seconds",
+                            deviceId);
+                    }
+                    else if (cancellationToken.IsCancellationRequested)
+                    {
+                        // User requested cancellation, rethrow
+                        throw;
+                    }
+                    // If only the polling task's own cancellation triggered, continue
+                }
+            }
 
-        // Restart polling
-        _ = Task.Run(() => PollDeviceAsync(context), context.CancellationTokenSource.Token);
+            // Disconnect
+            await context.Connection.DisconnectAsync().ConfigureAwait(false);
 
-        return true;
+            // Dispose old cancellation token source
+            oldCts.Dispose();
+
+            // Create new cancellation token source
+            context.CancellationTokenSource = new CancellationTokenSource();
+
+            // Start new polling task and track it
+            context.PollingTask = Task.Run(
+                () => PollDeviceAsync(context),
+                context.CancellationTokenSource.Token);
+
+            _logger.LogInformation("Device {DeviceId} restarted successfully", deviceId);
+
+            return true;
+        }
+        finally
+        {
+            context.RestartLock.Release();
+        }
     }
 
     /// <summary>
@@ -366,10 +412,13 @@ public sealed class ModbusDevicePool : IDisposable
     {
         public required ModbusDeviceConnection Connection { get; init; }
         public required DeviceConfig Config { get; init; }
-        public required CancellationTokenSource CancellationTokenSource { get; set; }
+        public CancellationTokenSource CancellationTokenSource { get; set; } = new();
+        public Task? PollingTask { get; set; }
+        public SemaphoreSlim RestartLock { get; } = new(1, 1);
 
         public void Dispose()
         {
+            RestartLock?.Dispose();
             CancellationTokenSource?.Dispose();
             Connection?.Dispose();
         }
