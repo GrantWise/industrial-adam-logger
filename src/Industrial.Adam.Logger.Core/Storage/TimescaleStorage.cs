@@ -104,6 +104,9 @@ public sealed class TimescaleStorage : ITimescaleStorage, IAsyncDisposable
             _deadLetterQueue = new DeadLetterQueue(_logger, _settings.DeadLetterQueuePath);
         }
 
+        // Validate table name to prevent SQL injection
+        ValidateTableName(_settings.TableName);
+
         // Setup retry policy using Polly
         _retryPolicy = Policy
             .Handle<NpgsqlException>()
@@ -733,6 +736,61 @@ public sealed class TimescaleStorage : ITimescaleStorage, IAsyncDisposable
         {
             _logger.LogError(ex, "Error during force flush operation");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Validate table name to prevent SQL injection
+    /// PostgreSQL table names must:
+    /// - Start with a letter or underscore
+    /// - Contain only letters, digits, underscores
+    /// - Be 1-63 characters long
+    /// - Not be a PostgreSQL reserved keyword
+    /// </summary>
+    private static void ValidateTableName(string tableName)
+    {
+        if (string.IsNullOrWhiteSpace(tableName))
+        {
+            throw new ArgumentException("Table name cannot be null or empty", nameof(tableName));
+        }
+
+        // Check length (PostgreSQL limit is 63 characters)
+        if (tableName.Length > 63)
+        {
+            throw new ArgumentException($"Table name '{tableName}' exceeds PostgreSQL maximum length of 63 characters", nameof(tableName));
+        }
+
+        // Check if starts with letter or underscore
+        if (!char.IsLetter(tableName[0]) && tableName[0] != '_')
+        {
+            throw new ArgumentException($"Table name '{tableName}' must start with a letter or underscore", nameof(tableName));
+        }
+
+        // Check if contains only valid characters (letters, digits, underscores)
+        if (!tableName.All(c => char.IsLetterOrDigit(c) || c == '_'))
+        {
+            throw new ArgumentException($"Table name '{tableName}' contains invalid characters. Only letters, digits, and underscores are allowed", nameof(tableName));
+        }
+
+        // Check for common SQL injection patterns
+        var lowerName = tableName.ToLowerInvariant();
+        if (lowerName.Contains("drop") || lowerName.Contains("delete") || lowerName.Contains("insert") ||
+            lowerName.Contains("update") || lowerName.Contains("select") || lowerName.Contains("--") ||
+            lowerName.Contains(";"))
+        {
+            throw new ArgumentException($"Table name '{tableName}' contains potentially dangerous SQL keywords or characters", nameof(tableName));
+        }
+
+        // Check against PostgreSQL reserved keywords that could be problematic
+        var reservedKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "user", "table", "index", "select", "insert", "update", "delete", "drop", "create", "alter",
+            "grant", "revoke", "commit", "rollback", "transaction", "database", "schema", "view", "trigger"
+        };
+
+        if (reservedKeywords.Contains(tableName))
+        {
+            throw new ArgumentException($"Table name '{tableName}' is a PostgreSQL reserved keyword and cannot be used", nameof(tableName));
         }
     }
 }
