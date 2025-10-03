@@ -241,6 +241,16 @@ public sealed class ModbusDevicePool : IDisposable
                         _logger.LogWarning(
                             "Failed to read channel {Channel} from device {DeviceId}: {Error}",
                             channel.ChannelNumber, deviceId, result.Error);
+
+                        // Create unavailable reading to maintain data integrity and transparency
+                        // This ensures downstream systems know the device is offline/unreachable
+                        var unavailableReading = CreateUnavailableReading(
+                            context.Config,
+                            channel,
+                            result.Error ?? "Communication failure");
+
+                        // Raise event with unavailable reading
+                        ReadingReceived?.Invoke(unavailableReading);
                     }
                 }
 
@@ -292,7 +302,38 @@ public sealed class ModbusDevicePool : IDisposable
             RawValue = rawValue,
             ProcessedValue = processedValue,
             Timestamp = DateTimeOffset.UtcNow,
-            Quality = DataQuality.Good
+            Quality = DataQuality.Good,
+            Unit = channel.Unit
+        };
+    }
+
+    /// <summary>
+    /// Create an unavailable reading when device communication fails.
+    /// This maintains data integrity by clearly indicating when data cannot be obtained.
+    /// </summary>
+    /// <param name="config">Device configuration</param>
+    /// <param name="channel">Channel configuration</param>
+    /// <param name="errorMessage">Error message describing the failure</param>
+    /// <returns>Device reading with Unavailable quality</returns>
+    private DeviceReading CreateUnavailableReading(
+        DeviceConfig config,
+        ChannelConfig channel,
+        string errorMessage)
+    {
+        return new DeviceReading
+        {
+            DeviceId = config.DeviceId,
+            Channel = channel.ChannelNumber,
+            RawValue = 0,
+            ProcessedValue = 0,
+            Timestamp = DateTimeOffset.UtcNow,
+            Quality = DataQuality.Unavailable,
+            Unit = channel.Unit,
+            Tags = new Dictionary<string, string>
+            {
+                { "error", errorMessage },
+                { "reason", "communication_failure" }
+            }
         };
     }
 

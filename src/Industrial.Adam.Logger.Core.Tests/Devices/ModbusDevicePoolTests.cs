@@ -224,8 +224,10 @@ public class ModbusDevicePoolTests : IDisposable
         await Task.Delay(200);
 
         // Assert
-        // In real scenario with connection, this would receive readings
-        receivedReading.Should().BeNull(); // No readings since we can't connect in test
+        // With data integrity improvements, we now receive Unavailable readings when connection fails
+        receivedReading.Should().NotBeNull("unavailable readings are now reported for transparency");
+        receivedReading!.Quality.Should().Be(DataQuality.Unavailable, "device connection failed");
+        receivedReading.DeviceId.Should().Be("TEST001");
     }
 
     [Fact]

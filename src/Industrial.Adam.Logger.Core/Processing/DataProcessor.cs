@@ -65,6 +65,16 @@ public sealed class DataProcessor : IDataProcessor, IDisposable
             return reading;
         }
 
+        // If data is unavailable, skip processing and return as-is
+        // This preserves data integrity - we don't calculate rates or validate unavailable data
+        if (reading.Quality == DataQuality.Unavailable)
+        {
+            _logger.LogDebug(
+                "Skipping processing for unavailable reading from {DeviceId} channel {Channel}",
+                reading.DeviceId, reading.Channel);
+            return reading;
+        }
+
         // Create a new reading with processed values
         var processed = reading with
         {
