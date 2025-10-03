@@ -17,7 +17,7 @@ namespace Industrial.Adam.Logger.Core.Storage;
 /// <summary>
 /// Stores device readings in TimescaleDB (PostgreSQL with TimescaleDB extension)
 /// </summary>
-public sealed class TimescaleStorage : ITimescaleStorage
+public sealed class TimescaleStorage : ITimescaleStorage, IAsyncDisposable
 {
     private readonly ILogger<TimescaleStorage> _logger;
     private readonly TimescaleSettings _settings;
@@ -604,9 +604,9 @@ public sealed class TimescaleStorage : ITimescaleStorage
     }
 
     /// <summary>
-    /// Dispose resources
+    /// Asynchronously dispose resources
     /// </summary>
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;
@@ -620,17 +620,20 @@ public sealed class TimescaleStorage : ITimescaleStorage
         _writer.Complete();
 
         // Cancel background processing
-        _backgroundCts.Cancel();
+        await _backgroundCts.CancelAsync().ConfigureAwait(false);
 
         try
         {
             // Wait for background task to complete with configurable timeout
             var shutdownTimeout = TimeSpan.FromSeconds(_settings.ShutdownTimeoutSeconds);
-            if (!_backgroundWriteTask.Wait(shutdownTimeout))
-            {
-                _logger.LogWarning("Background write task did not complete within {TimeoutSeconds}s shutdown timeout",
-                    _settings.ShutdownTimeoutSeconds);
-            }
+            using var timeoutCts = new CancellationTokenSource(shutdownTimeout);
+
+            await _backgroundWriteTask.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Background write task did not complete within {TimeoutSeconds}s shutdown timeout",
+                _settings.ShutdownTimeoutSeconds);
         }
         catch (Exception ex)
         {
@@ -650,6 +653,16 @@ public sealed class TimescaleStorage : ITimescaleStorage
             "Retries={Retries}, DeadLetterQueue={DeadLetterSize}",
             healthStatus.TotalSuccessfulBatches, healthStatus.TotalFailedBatches,
             healthStatus.TotalRetryAttempts, healthStatus.DeadLetterQueueSize);
+    }
+
+    /// <summary>
+    /// Dispose resources (synchronous fallback)
+    /// </summary>
+    public void Dispose()
+    {
+        // Use synchronous disposal pattern - call async version and block
+        // This is acceptable as a fallback for consumers that don't support IAsyncDisposable
+        DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(_settings.ShutdownTimeoutSeconds + 5));
     }
 
     /// <summary>

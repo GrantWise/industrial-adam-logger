@@ -14,7 +14,7 @@ namespace Industrial.Adam.Logger.Core.Services;
 /// <summary>
 /// Main service that orchestrates ADAM device monitoring and data logging
 /// </summary>
-public sealed class AdamLoggerService : IHostedService, IDisposable
+public sealed class AdamLoggerService : IHostedService, IAsyncDisposable, IDisposable
 {
     private readonly ILogger<AdamLoggerService> _logger;
     private readonly IOptions<LoggerConfiguration> _configuration;
@@ -343,9 +343,9 @@ public sealed class AdamLoggerService : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// Dispose of service resources
+    /// Asynchronously dispose of service resources
     /// </summary>
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;
@@ -358,16 +358,26 @@ public sealed class AdamLoggerService : IHostedService, IDisposable
         // Stop the service if running
         try
         {
-            StopAsync(CancellationToken.None).Wait(TimeSpan.FromSeconds(10));
+            await StopAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Error during dispose");
+            _logger.LogWarning(ex, "Error during async dispose");
         }
 
         // Dispose resources
         _stoppingCts?.Dispose();
         _startStopLock?.Dispose();
+    }
+
+    /// <summary>
+    /// Dispose of service resources (synchronous fallback)
+    /// </summary>
+    public void Dispose()
+    {
+        // Use synchronous disposal pattern - call async version and block
+        // This is acceptable as a fallback for consumers that don't support IAsyncDisposable
+        DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(10));
     }
 }
 

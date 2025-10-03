@@ -8,7 +8,7 @@ namespace Industrial.Adam.Logger.Core.Devices;
 /// <summary>
 /// Manages a pool of concurrent Modbus device connections with per-device polling
 /// </summary>
-public sealed class ModbusDevicePool : IDisposable
+public sealed class ModbusDevicePool : IAsyncDisposable, IDisposable
 {
     private readonly ConcurrentDictionary<string, DeviceContext> _devices = new();
     private readonly ILogger<ModbusDevicePool> _logger;
@@ -384,9 +384,9 @@ public sealed class ModbusDevicePool : IDisposable
     }
 
     /// <summary>
-    /// Dispose of all device connections and resources
+    /// Asynchronously dispose of all device connections and resources
     /// </summary>
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;
@@ -394,7 +394,7 @@ public sealed class ModbusDevicePool : IDisposable
         _disposed = true;
 
         // Stop all polling
-        Task.Run(async () => await StopAllAsync()).Wait(TimeSpan.FromSeconds(10));
+        await StopAllAsync().ConfigureAwait(false);
 
         // Dispose all contexts
         foreach (var context in _devices.Values)
@@ -403,6 +403,16 @@ public sealed class ModbusDevicePool : IDisposable
         }
 
         _devices.Clear();
+    }
+
+    /// <summary>
+    /// Dispose of all device connections and resources (synchronous fallback)
+    /// </summary>
+    public void Dispose()
+    {
+        // Use synchronous disposal pattern - call async version and block
+        // This is acceptable as a fallback for consumers that don't support IAsyncDisposable
+        DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(10));
     }
 
     /// <summary>
