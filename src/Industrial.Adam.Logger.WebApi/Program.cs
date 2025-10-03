@@ -1,12 +1,15 @@
 using System.Collections.Concurrent;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.OpenApi;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
 using Industrial.Adam.Logger.Core.Devices;
 using Industrial.Adam.Logger.Core.Extensions;
 using Industrial.Adam.Logger.Core.Models;
 using Industrial.Adam.Logger.Core.Services;
 using Industrial.Adam.Logger.Core.Storage;
+using Industrial.Adam.Logger.WebApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -50,11 +53,18 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
-    // Include XML comments
-    var xmlPath = Path.Combine(AppContext.BaseDirectory, "Industrial.Adam.Logger.WebApi.xml");
-    if (File.Exists(xmlPath))
+    // Include XML comments from both WebApi and Core library
+    var webApiXml = Path.Combine(AppContext.BaseDirectory, "Industrial.Adam.Logger.WebApi.xml");
+    var coreXml = Path.Combine(AppContext.BaseDirectory, "Industrial.Adam.Logger.Core.xml");
+
+    if (File.Exists(webApiXml))
     {
-        c.IncludeXmlComments(xmlPath);
+        c.IncludeXmlComments(webApiXml);
+    }
+
+    if (File.Exists(coreXml))
+    {
+        c.IncludeXmlComments(coreXml);
     }
 });
 
@@ -155,17 +165,17 @@ if (devicePool != null)
 app.MapGet("/health", (AdamLoggerService loggerService) =>
 {
     var status = loggerService.GetStatus();
-    var result = new
+    var result = new HealthResponse
     {
         Status = status.IsRunning ? "Healthy" : "Unhealthy",
         Timestamp = DateTimeOffset.UtcNow,
-        Service = new
+        Service = new ServiceInfo
         {
             IsRunning = status.IsRunning,
             StartTime = status.StartTime,
             Uptime = status.IsRunning ? DateTimeOffset.UtcNow - status.StartTime : TimeSpan.Zero
         },
-        Devices = new
+        Devices = new DevicesInfo
         {
             Total = status.TotalDevices,
             Connected = status.ConnectedDevices,
@@ -178,7 +188,7 @@ app.MapGet("/health", (AdamLoggerService loggerService) =>
 .WithName("GetHealth")
 .WithSummary("Get service health status")
 .WithDescription("Returns overall health status of the ADAM Logger service including device connectivity")
-.Produces<object>(200)
+.Produces<HealthResponse>(200)
 .Produces(401)
 .WithTags("Health")
 .RequireAuthorization();
@@ -188,25 +198,25 @@ app.MapGet("/health/detailed", async (AdamLoggerService loggerService, ITimescal
     var status = loggerService.GetStatus();
     var timescaleHealthy = await timescaleStorage.TestConnectionAsync();
 
-    var result = new
+    var result = new DetailedHealthResponse
     {
         Status = status.IsRunning && timescaleHealthy ? "Healthy" : "Unhealthy",
         Timestamp = DateTimeOffset.UtcNow,
-        Components = new
+        Components = new ComponentsHealth
         {
-            Service = new
+            Service = new ComponentStatus
             {
                 Status = status.IsRunning ? "Healthy" : "Unhealthy",
                 IsRunning = status.IsRunning,
                 StartTime = status.StartTime,
                 Uptime = status.IsRunning ? DateTimeOffset.UtcNow - status.StartTime : TimeSpan.Zero
             },
-            Database = new
+            Database = new DatabaseStatus
             {
                 Status = timescaleHealthy ? "Healthy" : "Unhealthy",
                 Connected = timescaleHealthy
             },
-            Devices = new
+            Devices = new DeviceComponentStatus
             {
                 Status = status.ConnectedDevices == status.TotalDevices ? "Healthy" :
                         status.ConnectedDevices > 0 ? "Degraded" : "Unhealthy",
@@ -222,7 +232,7 @@ app.MapGet("/health/detailed", async (AdamLoggerService loggerService, ITimescal
 .WithName("GetDetailedHealth")
 .WithSummary("Get detailed health status")
 .WithDescription("Returns comprehensive health check including service, database, and individual device status")
-.Produces<object>(200)
+.Produces<DetailedHealthResponse>(200)
 .Produces(401)
 .WithTags("Health")
 .RequireAuthorization();
@@ -239,7 +249,7 @@ app.MapGet("/devices", (AdamLoggerService loggerService) =>
 .WithName("GetDevices")
 .WithSummary("Get all devices status")
 .WithDescription("Returns health and connectivity status for all configured ADAM devices")
-.Produces<object>(200)
+.Produces<Dictionary<string, DeviceHealth>>(200)
 .Produces(401)
 .WithTags("Devices")
 .RequireAuthorization();
@@ -252,13 +262,13 @@ app.MapGet("/devices/{deviceId}", (string deviceId, AdamLoggerService loggerServ
         return Results.Ok(health);
     }
 
-    return Results.NotFound(new { Error = $"Device '{deviceId}' not found" });
+    return Results.NotFound(new ErrorResponse { Error = $"Device '{deviceId}' not found" });
 })
 .WithName("GetDevice")
 .WithSummary("Get specific device status")
 .WithDescription("Returns health and connectivity status for a specific ADAM device by ID")
-.Produces<object>(200)
-.Produces<object>(404)
+.Produces<DeviceHealth>(200)
+.Produces<ErrorResponse>(404)
 .Produces(401)
 .WithTags("Devices")
 .RequireAuthorization();
@@ -270,10 +280,10 @@ app.MapPost("/devices/{deviceId}/restart", async (string deviceId, AdamLoggerSer
         var result = await loggerService.RestartDeviceAsync(deviceId);
         if (result)
         {
-            return Results.Ok(new { Message = $"Device '{deviceId}' restarted successfully" });
+            return Results.Ok(new ApiResponse { Message = $"Device '{deviceId}' restarted successfully" });
         }
 
-        return Results.NotFound(new { Error = $"Device '{deviceId}' not found" });
+        return Results.NotFound(new ErrorResponse { Error = $"Device '{deviceId}' not found" });
     }
     catch (Exception ex)
     {
@@ -286,8 +296,8 @@ app.MapPost("/devices/{deviceId}/restart", async (string deviceId, AdamLoggerSer
 .WithName("RestartDevice")
 .WithSummary("Restart specific device")
 .WithDescription("Restarts connection to a specific ADAM device to resolve connectivity issues")
-.Produces<object>(200)
-.Produces<object>(404)
+.Produces<ApiResponse>(200)
+.Produces<ErrorResponse>(404)
 .ProducesProblem(500)
 .Produces(401)
 .WithTags("Devices")
@@ -304,17 +314,17 @@ app.MapGet("/data/latest", () =>
         .ThenBy(r => r.Channel)
         .ToList();
 
-    return Results.Ok(new
+    return Results.Ok(new LatestDataResponse
     {
         Count = readings.Count,
-        LastUpdated = readings.Count > 0 ? readings.Max(r => r.Timestamp) : (DateTimeOffset?)null,
+        LastUpdated = readings.Count > 0 ? readings.Max(r => r.Timestamp) : null,
         Readings = readings
     });
 })
 .WithName("GetLatestData")
 .WithSummary("Get latest readings from all devices")
 .WithDescription("Returns the most recent counter readings from all connected ADAM devices")
-.Produces<object>(200)
+.Produces<LatestDataResponse>(200)
 .Produces(401)
 .WithTags("Data")
 .RequireAuthorization();
@@ -328,10 +338,10 @@ app.MapGet("/data/latest/{deviceId}", (string deviceId) =>
 
     if (deviceReadings.Count == 0)
     {
-        return Results.NotFound(new { Error = $"No readings found for device '{deviceId}'" });
+        return Results.NotFound(new ErrorResponse { Error = $"No readings found for device '{deviceId}'" });
     }
 
-    return Results.Ok(new
+    return Results.Ok(new DeviceLatestDataResponse
     {
         DeviceId = deviceId,
         Count = deviceReadings.Count,
@@ -342,8 +352,8 @@ app.MapGet("/data/latest/{deviceId}", (string deviceId) =>
 .WithName("GetDeviceLatestData")
 .WithSummary("Get latest readings for specific device")
 .WithDescription("Returns the most recent counter readings for a specific ADAM device")
-.Produces<object>(200)
-.Produces<object>(404)
+.Produces<DeviceLatestDataResponse>(200)
+.Produces<ErrorResponse>(404)
 .Produces(401)
 .WithTags("Data")
 .RequireAuthorization();
@@ -354,7 +364,7 @@ app.MapGet("/data/stats", (AdamLoggerService loggerService) =>
     var readings = latestReadings.Values.ToList();
 
     var deviceStats = readings.GroupBy(r => r.DeviceId)
-        .Select(g => new
+        .Select(g => new DeviceStatistics
         {
             DeviceId = g.Key,
             ChannelCount = g.Count(),
@@ -364,16 +374,16 @@ app.MapGet("/data/stats", (AdamLoggerService loggerService) =>
                 .ToDictionary(q => q.Key.ToString(), q => q.Count())
         }).ToList();
 
-    return Results.Ok(new
+    return Results.Ok(new DataStatisticsResponse
     {
-        Summary = new
+        Summary = new StatisticsSummary
         {
             ServiceRunning = status.IsRunning,
             ServiceUptime = status.IsRunning ? DateTimeOffset.UtcNow - status.StartTime : TimeSpan.Zero,
             TotalDevices = status.TotalDevices,
             ConnectedDevices = status.ConnectedDevices,
             TotalReadings = readings.Count,
-            LastDataUpdate = readings.Count > 0 ? readings.Max(r => r.Timestamp) : (DateTimeOffset?)null
+            LastDataUpdate = readings.Count > 0 ? readings.Max(r => r.Timestamp) : null
         },
         DeviceStatistics = deviceStats
     });
@@ -381,7 +391,7 @@ app.MapGet("/data/stats", (AdamLoggerService loggerService) =>
 .WithName("GetDataStatistics")
 .WithSummary("Get data collection statistics")
 .WithDescription("Returns comprehensive statistics about data collection including device performance and data quality metrics")
-.Produces<object>(200)
+.Produces<DataStatisticsResponse>(200)
 .Produces(401)
 .WithTags("Data")
 .RequireAuthorization();
@@ -393,12 +403,12 @@ app.MapGet("/data/stats", (AdamLoggerService loggerService) =>
 app.MapGet("/config", (IConfiguration configuration) =>
 {
     // Return safe configuration info (no secrets)
-    var safeConfig = new
+    var safeConfig = new ConfigurationResponse
     {
         Environment = app.Environment.EnvironmentName,
         LogLevel = configuration["Logging:LogLevel:Default"],
         DemoMode = configuration.GetValue<bool>("DemoMode"),
-        TimescaleDb = new
+        TimescaleDb = new TimescaleDbConfig
         {
             Host = configuration["TimescaleDb:Host"],
             Port = configuration.GetValue<int>("TimescaleDb:Port"),
@@ -414,7 +424,7 @@ app.MapGet("/config", (IConfiguration configuration) =>
 .WithName("GetConfiguration")
 .WithSummary("Get system configuration")
 .WithDescription("Returns safe system configuration settings (no sensitive data like connection strings)")
-.Produces<object>(200)
+.Produces<ConfigurationResponse>(200)
 .Produces(401)
 .WithTags("Configuration")
 .RequireAuthorization();
@@ -428,18 +438,22 @@ app.MapDelete("/data/cache", () =>
     var count = latestReadings.Count;
     latestReadings.Clear();
 
-    return Results.Ok(new { Message = $"Cleared {count} cached readings" });
+    return Results.Ok(new ApiResponse { Message = $"Cleared {count} cached readings" });
 })
 .WithName("ClearDataCache")
 .WithSummary("Clear cached data readings")
 .WithDescription("Clears the in-memory cache of latest device readings (does not affect database storage)")
-.Produces<object>(200)
+.Produces<ApiResponse>(200)
 .Produces(401)
 .WithTags("Utilities")
 .RequireAuthorization();
 
 // Add built-in health checks endpoint
-app.MapHealthChecks("/health/checks");
+app.MapHealthChecks("/health/checks")
+    .WithName("GetHealthChecks")
+    .WithSummary("ASP.NET Core health checks")
+    .WithDescription("Built-in health check endpoint for monitoring TimescaleDB connectivity and device pool status")
+    .WithTags("Health");
 
 app.Run();
 
