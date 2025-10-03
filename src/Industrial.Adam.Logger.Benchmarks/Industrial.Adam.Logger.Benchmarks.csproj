@@ -3,6 +3,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <!-- Benchmarks follow centralized settings from Directory.Build.props -->
   </PropertyGroup>
 

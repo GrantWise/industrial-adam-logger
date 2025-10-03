@@ -10,9 +10,6 @@ using Industrial.Adam.Logger.Core.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add environment file support
-builder.Configuration.AddEnvironmentFiles(builder.Environment.EnvironmentName);
-
 // Add services to the container
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
