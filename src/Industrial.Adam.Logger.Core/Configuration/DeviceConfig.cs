@@ -22,6 +22,12 @@ public class DeviceConfig
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
+    /// ADAM model type for documentation (e.g., "ADAM-6051", "ADAM-6017")
+    /// </summary>
+    [StringLength(50, ErrorMessage = "ModelType must be 50 characters or less")]
+    public string? ModelType { get; set; }
+
+    /// <summary>
     /// Whether this device is enabled for monitoring
     /// </summary>
     public bool Enabled { get; set; } = true;

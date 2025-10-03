@@ -263,10 +263,15 @@ public sealed class ModbusDevicePool : IAsyncDisposable, IDisposable
                     if (token.IsCancellationRequested)
                         break;
 
-                    var result = await context.Connection.ReadRegistersAsync(
-                        channel.StartRegister,
-                        (ushort)channel.RegisterCount,
-                        token);
+                    // Choose read method based on register type
+                    var result = channel.RegisterType switch
+                    {
+                        ModbusRegisterType.InputRegister => await context.Connection.ReadInputRegistersAsync(
+                            channel.StartRegister, (ushort)channel.RegisterCount, token),
+                        ModbusRegisterType.HoldingRegister => await context.Connection.ReadRegistersAsync(
+                            channel.StartRegister, (ushort)channel.RegisterCount, token),
+                        _ => throw new NotSupportedException($"Register type {channel.RegisterType} not supported")
+                    };
 
                     if (result.Success && result.Registers != null)
                     {
@@ -327,19 +332,19 @@ public sealed class ModbusDevicePool : IAsyncDisposable, IDisposable
     /// </summary>
     private DeviceReading ProcessReading(DeviceConfig config, ChannelConfig channel, ushort[] registers)
     {
-        // Combine registers into counter value (assuming 32-bit counter)
-        long rawValue = 0;
-        if (registers.Length >= 2)
+        // Convert registers to numeric value based on data type
+        long rawValue = channel.DataType switch
         {
-            rawValue = ((long)registers[1] << 16) | registers[0];
-        }
-        else if (registers.Length == 1)
-        {
-            rawValue = registers[0];
-        }
+            ChannelDataType.UInt32Counter => ConvertToUInt32(registers),
+            ChannelDataType.Int16 => (short)registers[0],
+            ChannelDataType.UInt16 => registers[0],
+            ChannelDataType.Int32 => ConvertToInt32(registers),
+            ChannelDataType.Float32 => ConvertToFloat32AsLong(registers),
+            _ => throw new NotSupportedException($"Data type {channel.DataType} not supported")
+        };
 
-        // Apply scaling factor if configured
-        var processedValue = rawValue * channel.ScaleFactor;
+        // Apply scaling factor and offset
+        var processedValue = rawValue * channel.ScaleFactor + channel.Offset;
 
         return new DeviceReading
         {
@@ -351,6 +356,48 @@ public sealed class ModbusDevicePool : IAsyncDisposable, IDisposable
             Quality = DataQuality.Good,
             Unit = channel.Unit
         };
+    }
+
+    /// <summary>
+    /// Convert two 16-bit registers to 32-bit unsigned integer (little-endian)
+    /// Used for digital counters (ADAM-6051, 6052, etc.)
+    /// </summary>
+    private static long ConvertToUInt32(ushort[] registers)
+    {
+        if (registers.Length < 2)
+            return registers.Length == 1 ? registers[0] : 0;
+
+        return ((long)registers[1] << 16) | registers[0];
+    }
+
+    /// <summary>
+    /// Convert two 16-bit registers to 32-bit signed integer (little-endian)
+    /// </summary>
+    private static long ConvertToInt32(ushort[] registers)
+    {
+        return (int)ConvertToUInt32(registers);
+    }
+
+    /// <summary>
+    /// Convert two 16-bit registers to IEEE 754 float, return as long for storage
+    /// Used for analog modules (ADAM-6017, 6015, etc.)
+    /// </summary>
+    private static long ConvertToFloat32AsLong(ushort[] registers)
+    {
+        if (registers.Length < 2)
+            return 0;
+
+        // ADAM modules use big-endian byte order for floats
+        var bytes = new byte[4];
+        bytes[0] = (byte)(registers[0] >> 8);
+        bytes[1] = (byte)(registers[0] & 0xFF);
+        bytes[2] = (byte)(registers[1] >> 8);
+        bytes[3] = (byte)(registers[1] & 0xFF);
+
+        var floatValue = BitConverter.ToSingle(bytes, 0);
+
+        // Store as scaled long (multiply by 1000 to preserve 3 decimal places)
+        return (long)(floatValue * 1000);
     }
 
     /// <summary>

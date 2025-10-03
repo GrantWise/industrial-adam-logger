@@ -217,6 +217,74 @@ public sealed class ModbusDeviceConnection : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
+    /// Read input registers with retry policy (Function Code 04)
+    /// Used for analog input modules (ADAM-6015, 6017, 6018, etc.)
+    /// </summary>
+    public async Task<ReadResult> ReadInputRegistersAsync(
+        ushort startAddress,
+        ushort count,
+        CancellationToken cancellationToken = default)
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            // Ensure connection
+            if (!_isConnected && !await ConnectAsync(cancellationToken))
+            {
+                return new ReadResult
+                {
+                    Success = false,
+                    Error = "Failed to establish connection",
+                    Duration = stopwatch.Elapsed
+                };
+            }
+
+            // Read with retry policy
+            var registers = await _retryPolicy.ExecuteAsync(async (ct) =>
+            {
+                if (_modbusMaster == null)
+                    throw new InvalidOperationException("Modbus master not initialized");
+
+                // Check connection before read
+                if (!_isConnected || _tcpClient?.Connected != true)
+                {
+                    _isConnected = false;
+                    await ConnectAsync(ct);
+                    if (!_isConnected)
+                        throw new InvalidOperationException("Connection lost");
+                }
+
+                return await Task.Run(() =>
+                    _modbusMaster.ReadInputRegisters(_config.UnitId, startAddress, count), ct);
+            }, cancellationToken);
+
+            return new ReadResult
+            {
+                Success = true,
+                Registers = registers,
+                Duration = stopwatch.Elapsed
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to read input registers from device {DeviceId} after retries",
+                _config.DeviceId);
+
+            // Mark as disconnected on failure
+            _isConnected = false;
+
+            return new ReadResult
+            {
+                Success = false,
+                Error = ex.Message,
+                Duration = stopwatch.Elapsed
+            };
+        }
+    }
+
+    /// <summary>
     /// Test connection with lightweight read
     /// </summary>
     public async Task<bool> TestConnectionAsync(CancellationToken cancellationToken = default)

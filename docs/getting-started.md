@@ -11,8 +11,12 @@ This guide will help you set up and run the Industrial ADAM Logger for the first
 - Docker Desktop ([Download](https://www.docker.com/products/docker-desktop))
 
 ### Optional
-- Physical ADAM-6051 device (simulators available for testing)
+- Physical ADAM-6000 series device (simulators available for testing digital counters)
 - Visual Studio 2022 / VS Code / Rider
+
+### Supported Devices
+- **Digital I/O**: ADAM-6050, 6051, 6052, 6053, 6055, 6056
+- **Analog Input**: ADAM-6015, 6017, 6018, 6024
 
 ## Installation
 

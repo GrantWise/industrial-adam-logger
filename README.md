@@ -1,20 +1,39 @@
 # Industrial ADAM Logger
 
-**Industrial-grade data acquisition service for ADAM-6051 counter devices.**
+**Industrial-grade data acquisition service for ADAM-6000 series modules.**
 Modbus TCP → TimescaleDB pipeline with dead letter queue reliability for 24/7 manufacturing operations.
 
 ## What It Does
 
-Connects to ADAM-6051 industrial counter devices via Modbus TCP, reads counter values from configured channels, and persists time-series data to TimescaleDB with zero data loss guarantees.
+Connects to ADAM-6000 series industrial modules (digital counters and analog inputs) via Modbus TCP, reads data from configured channels, and persists time-series data to TimescaleDB with zero data loss guarantees.
+
+### Supported Hardware
+
+**Digital I/O Modules (Counter-based)**
+- ✅ ADAM-6050 (12 DI / 6 DO)
+- ✅ ADAM-6051 (16 DI)
+- ✅ ADAM-6052 (8 DI / 8 DO)
+- ✅ ADAM-6053 (16 DI / 16 DO)
+- ✅ ADAM-6055 (16 DI / 16 DO sink)
+- ✅ ADAM-6056 (12 DI / 6 DO)
+
+**Analog Input Modules**
+- ✅ ADAM-6015 (7-ch RTD temperature)
+- ✅ ADAM-6017 (8-ch analog ±10V)
+- ✅ ADAM-6018 (8-ch thermocouple)
+- ✅ ADAM-6024 (4-ch analog output)
 
 ### Core Features
 
+- ✅ **Multi-Model Support** - Digital counters + analog inputs (temperature, voltage, etc.)
 - ✅ **Modbus TCP Communication** - Robust device connectivity with automatic retry
 - ✅ **Concurrent Multi-Device Polling** - Poll multiple ADAM devices simultaneously
+- ✅ **Configuration-Driven** - Add new devices via JSON, no code changes needed
 - ✅ **TimescaleDB Integration** - Optimized time-series storage with hypertables
 - ✅ **Dead Letter Queue** - Zero data loss with automatic recovery
-- ✅ **Windowed Rate Calculation** - Smooth production rate metrics
+- ✅ **Windowed Rate Calculation** - Smooth production rate metrics (for counters)
 - ✅ **Counter Overflow Detection** - Handles 16-bit and 32-bit counter wraparounds
+- ✅ **Data Quality Indicators** - Good, Degraded, Bad, Unavailable (21 CFR Part 11 compliant)
 - ✅ **REST API** - Query device status and historical data
 - ✅ **Health Monitoring** - Built-in health checks and diagnostics
 - ✅ **Device Simulators** - Test without physical hardware
@@ -58,12 +77,15 @@ dotnet run --project src/Industrial.Adam.Logger.WebApi
 
 ```
 ┌─────────────┐    Modbus TCP    ┌──────────────┐    SQL    ┌─────────────┐
-│ ADAM-6051   │─────────────────▶│ Logger       │──────────▶│ TimescaleDB │
+│ ADAM-6000   │─────────────────▶│ Logger       │──────────▶│ TimescaleDB │
 │ Devices     │                   │ Service      │           │             │
+│ (Digital/   │                   │              │           │             │
+│  Analog)    │                   │              │           │             │
 └─────────────┘                   └──────────────┘           └─────────────┘
                                         │
                                         ├─ Dead Letter Queue
                                         ├─ Rate Calculator
+                                        ├─ Data Quality Monitor
                                         └─ Health Monitor
 ```
 
@@ -77,36 +99,54 @@ dotnet run --project src/Industrial.Adam.Logger.WebApi
 
 Edit `src/Industrial.Adam.Logger.WebApi/appsettings.json`:
 
+### Digital Counter Example (ADAM-6051)
 ```json
 {
-  "AdamLogger": {
-    "Devices": [
-      {
-        "DeviceId": "ADAM-001",
-        "IpAddress": "192.168.1.100",
-        "Port": 502,
-        "PollIntervalMs": 1000,
-        "Channels": [
-          {
-            "ChannelNumber": 0,
-            "Name": "Main Counter",
-            "StartRegister": 0,
-            "RegisterCount": 2,
-            "ScaleFactor": 1.0
-          }
-        ]
-      }
-    ]
-  },
-  "TimescaleDb": {
-    "Host": "localhost",
-    "Port": 5432,
-    "Database": "adam_logger",
-    "Username": "industrial_system",
-    "Password": "your-password"
-  }
+  "DeviceId": "COUNTER-01",
+  "ModelType": "ADAM-6051",
+  "IpAddress": "192.168.1.100",
+  "Port": 502,
+  "Channels": [
+    {
+      "ChannelNumber": 0,
+      "Name": "Production Counter",
+      "StartRegister": 0,
+      "RegisterCount": 2,
+      "Unit": "items"
+    }
+  ]
 }
 ```
+
+### Analog Input Example (ADAM-6017)
+```json
+{
+  "DeviceId": "TEMP-01",
+  "ModelType": "ADAM-6017",
+  "IpAddress": "192.168.1.105",
+  "Port": 502,
+  "Channels": [
+    {
+      "ChannelNumber": 0,
+      "Name": "Oven Temperature",
+      "StartRegister": 0,
+      "RegisterCount": 1,
+      "RegisterType": "InputRegister",
+      "DataType": "Int16",
+      "ScaleFactor": 0.1,
+      "Unit": "°C",
+      "MinValue": -50,
+      "MaxValue": 1000
+    }
+  ]
+}
+```
+
+**Key Configuration Fields:**
+- `RegisterType`: `HoldingRegister` (counters) or `InputRegister` (analog)
+- `DataType`: `UInt32Counter`, `Int16`, `UInt16`, `Float32`, `Int32`
+- `ScaleFactor`: Multiply raw value (e.g., 0.1 to convert to decimal)
+- `Unit`: Measurement unit for display
 
 ## API Endpoints
 
@@ -125,13 +165,14 @@ Edit `src/Industrial.Adam.Logger.WebApi/appsettings.json`:
 - `GET /data/latest/{deviceId}` - Latest readings for specific device
 - `GET /data/stats` - Data collection statistics
 
-## Hardware Compatibility
+## Additional Documentation
 
-| Model | Status | Notes |
-|-------|--------|-------|
-| ADAM-6051 | ✅ Fully Supported | 16-channel digital input counter |
-| ADAM-6052 | 🟡 Compatible | Should work, untested |
-| ADAM-6060 | 🟡 Compatible | 6-channel relay, counter mode |
+See the `docs/` directory for detailed guides:
+- [Getting Started Guide](docs/getting-started.md) - Step-by-step setup
+- [Simulator Guide](docs/simulator-guide.md) - Testing without hardware
+- [E2E Testing Guide](docs/e2e-testing-guide.md) - Integration testing
+- [Development Guidelines](CLAUDE.md) - For contributors and AI assistants
+- [GitHub Workflow](GITHUB-WORKFLOW.md) - Branching and commit conventions
 
 ## Development
 
@@ -184,14 +225,6 @@ docker-compose up -d
 - [ ] Configure monitoring/alerting
 - [ ] Review CORS allowed origins
 - [ ] Enable HTTPS
-
-## Documentation
-
-- [Getting Started Guide](docs/getting-started.md)
-- [API Reference](docs/api-reference.md)
-- [Hardware Setup](docs/hardware-setup.md)
-- [Deployment Guide](docs/deployment.md)
-- [Development Guidelines](CLAUDE.md)
 
 ## Technology Stack
 

@@ -4,9 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Industrial ADAM Logger** - Industrial-grade data acquisition service that reads counter values from ADAM-6051 devices via Modbus TCP and persists time-series data to TimescaleDB with zero data loss guarantees.
+**Industrial ADAM Logger** - Industrial-grade data acquisition service that reads data from ADAM-6000 series modules (digital counters and analog inputs) via Modbus TCP and persists time-series data to TimescaleDB with zero data loss guarantees.
 
 **Key Purpose:** Modbus TCP → TimescaleDB pipeline with dead letter queue reliability for 24/7 manufacturing operations.
+
+**Supported Devices:**
+- Digital I/O: ADAM-6050, 6051, 6052, 6053, 6055, 6056
+- Analog Input: ADAM-6015, 6017, 6018, 6024
 
 ## 1. Core Philosophy: Pragmatic Over Dogmatic
 
@@ -320,14 +324,50 @@ Swagger UI: `http://localhost:5000/swagger`
 
 ## 11. Hardware Configuration
 
-### ADAM-6051 Devices
+### ADAM-6000 Series Devices
 
-- **Model**: ADAM-6051 (16-channel digital input counter)
-- **Protocol**: Modbus TCP
-- **Default Port**: 502
-- **Register Mapping**:
-  - 32-bit counters use 2 consecutive registers (high word, low word)
-  - Default: Channel 0 = registers 0-1, Channel 1 = registers 2-3, etc.
+**Digital I/O Modules (Counters)**
+- **Models**: ADAM-6050, 6051, 6052, 6053, 6055, 6056
+- **Protocol**: Modbus TCP (Holding Registers, Function Code 03)
+- **Data Type**: 32-bit counters (2 registers, little-endian)
+- **Configuration**: `RegisterType: HoldingRegister`, `DataType: UInt32Counter`
+
+**Analog Input Modules**
+- **Models**: ADAM-6015 (RTD), 6017 (analog), 6018 (thermocouple), 6024 (output)
+- **Protocol**: Modbus TCP (Input Registers, Function Code 04)
+- **Data Types**: Int16, UInt16, or Float32 depending on module
+- **Configuration**: `RegisterType: InputRegister`, `DataType: Int16/UInt16/Float32`
+
+**Register Mapping:**
+- Digital counters: 2 consecutive registers per channel (e.g., Ch0 = 0-1, Ch1 = 2-3)
+- Analog inputs: 1 or 2 registers per channel depending on data type
+- All devices use default Modbus TCP port 502
+
+### Configuration Examples
+
+**Digital Counter (ADAM-6051):**
+```json
+{
+  "ChannelNumber": 0,
+  "StartRegister": 0,
+  "RegisterCount": 2,
+  "RegisterType": "HoldingRegister",
+  "DataType": "UInt32Counter"
+}
+```
+
+**Analog Temperature (ADAM-6017):**
+```json
+{
+  "ChannelNumber": 0,
+  "StartRegister": 0,
+  "RegisterCount": 1,
+  "RegisterType": "InputRegister",
+  "DataType": "Int16",
+  "ScaleFactor": 0.1,
+  "Unit": "°C"
+}
+```
 
 ### Simulator Configuration
 
@@ -336,6 +376,7 @@ Simulators mimic ADAM-6051 behavior for testing:
 - Generate realistic counter increments
 - Support all Modbus TCP commands
 - Configurable via command-line arguments
+- **Note**: Simulators currently only support digital counters (ADAM-6051)
 
 ## 12. Deployment
 

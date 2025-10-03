@@ -3,6 +3,55 @@ using System.ComponentModel.DataAnnotations;
 namespace Industrial.Adam.Logger.Core.Configuration;
 
 /// <summary>
+/// Modbus register type for reading data
+/// </summary>
+public enum ModbusRegisterType
+{
+    /// <summary>
+    /// Holding Register (Function Code 03) - Used for counters and digital I/O
+    /// </summary>
+    HoldingRegister = 0,
+
+    /// <summary>
+    /// Input Register (Function Code 04) - Used for analog inputs
+    /// </summary>
+    InputRegister = 1
+}
+
+/// <summary>
+/// Data type stored in Modbus registers
+/// </summary>
+public enum ChannelDataType
+{
+    /// <summary>
+    /// 32-bit unsigned counter (2 registers, little-endian)
+    /// Used for digital counters (ADAM-6051, 6052, etc.)
+    /// </summary>
+    UInt32Counter = 0,
+
+    /// <summary>
+    /// Signed 16-bit integer (-32768 to 32767)
+    /// </summary>
+    Int16 = 1,
+
+    /// <summary>
+    /// Unsigned 16-bit integer (0 to 65535)
+    /// </summary>
+    UInt16 = 2,
+
+    /// <summary>
+    /// IEEE 754 32-bit float (2 registers, big-endian)
+    /// Used for analog modules (ADAM-6017, 6015, etc.)
+    /// </summary>
+    Float32 = 3,
+
+    /// <summary>
+    /// Signed 32-bit integer (2 registers, little-endian)
+    /// </summary>
+    Int32 = 4
+}
+
+/// <summary>
 /// Configuration for a device channel
 /// </summary>
 public class ChannelConfig
@@ -36,6 +85,16 @@ public class ChannelConfig
     /// Whether this channel is enabled
     /// </summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Modbus register type to read (default: HoldingRegister for counters)
+    /// </summary>
+    public ModbusRegisterType RegisterType { get; set; } = ModbusRegisterType.HoldingRegister;
+
+    /// <summary>
+    /// Data type interpretation (default: UInt32Counter for digital counters)
+    /// </summary>
+    public ChannelDataType DataType { get; set; } = ChannelDataType.UInt32Counter;
 
     /// <summary>
     /// Scaling factor to apply to raw value
