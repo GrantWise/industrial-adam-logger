@@ -37,6 +37,16 @@ public class LoggerConfiguration
     public bool DemoMode { get; set; } = false;
 
     /// <summary>
+    /// MQTT broker settings (optional)
+    /// </summary>
+    public MqttSettings? Mqtt { get; set; }
+
+    /// <summary>
+    /// List of MQTT devices to monitor (optional)
+    /// </summary>
+    public List<MqttDeviceConfig> MqttDevices { get; set; } = [];
+
+    /// <summary>
     /// Validate the configuration
     /// </summary>
     public ValidationResult Validate()
@@ -73,6 +83,36 @@ public class LoggerConfiguration
         if (!timescaleErrors.IsValid)
         {
             errors.AddRange(timescaleErrors.Errors);
+        }
+
+        // Validate MQTT settings if configured
+        if (Mqtt != null)
+        {
+            var mqttErrors = Mqtt.Validate();
+            if (!mqttErrors.IsValid)
+            {
+                errors.AddRange(mqttErrors.Errors);
+            }
+
+            // Validate MQTT devices
+            foreach (var device in MqttDevices)
+            {
+                var deviceErrors = device.Validate();
+                if (!deviceErrors.IsValid)
+                {
+                    errors.AddRange(deviceErrors.Errors);
+                }
+            }
+
+            // Check for duplicate MQTT device IDs
+            var duplicateMqttIds = MqttDevices.GroupBy(d => d.DeviceId)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key);
+
+            foreach (var id in duplicateMqttIds)
+            {
+                errors.Add($"Duplicate MQTT device ID: {id}");
+            }
         }
 
         return new ValidationResult
