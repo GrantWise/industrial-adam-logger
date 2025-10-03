@@ -102,6 +102,12 @@ public class TimescaleSettings
     public int ShutdownTimeoutSeconds { get; set; } = Constants.DefaultShutdownTimeoutSeconds;
 
     /// <summary>
+    /// Database initialization timeout in seconds
+    /// </summary>
+    [Range(5, 120, ErrorMessage = "DatabaseInitTimeoutSeconds must be between 5 and 120 seconds")]
+    public int? DatabaseInitTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>
     /// Enable SSL/TLS for the connection
     /// </summary>
     public bool EnableSsl { get; set; } = false;

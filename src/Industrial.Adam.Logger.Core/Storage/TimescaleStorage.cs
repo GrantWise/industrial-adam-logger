@@ -121,8 +121,16 @@ public sealed class TimescaleStorage : ITimescaleStorage, IAsyncDisposable
                         retryCount, _settings.MaxRetryAttempts, timeSpan.TotalMilliseconds, exception.Message);
                 });
 
-        // Initialize database schema
-        InitializeDatabaseAsync().GetAwaiter().GetResult();
+        // Initialize database schema with timeout
+        using var initCts = new CancellationTokenSource(TimeSpan.FromSeconds(_settings.DatabaseInitTimeoutSeconds ?? 30));
+        try
+        {
+            InitializeDatabaseAsync(initCts.Token).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException($"Database initialization timed out after {_settings.DatabaseInitTimeoutSeconds ?? 30} seconds");
+        }
 
         // Start background writer task
         _backgroundWriteTask = Task.Run(ProcessWritesAsync, _backgroundCts.Token);
@@ -251,17 +259,17 @@ public sealed class TimescaleStorage : ITimescaleStorage, IAsyncDisposable
     /// <summary>
     /// Initialize database schema and hypertable
     /// </summary>
-    private async Task InitializeDatabaseAsync()
+    private async Task InitializeDatabaseAsync(CancellationToken cancellationToken = default)
     {
         try
         {
             using var connection = new NpgsqlConnection(_connectionString);
-            await connection.OpenAsync().ConfigureAwait(false);
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
             // Create the table first
             var createTableSql = string.Format(_createTableSql, _settings.TableName);
             using var createCommand = new NpgsqlCommand(createTableSql, connection);
-            await createCommand.ExecuteNonQueryAsync().ConfigureAwait(false);
+            await createCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
             // Check if hypertable already exists, and create it if not
             var checkHypertableSql = $"""
@@ -272,14 +280,14 @@ public sealed class TimescaleStorage : ITimescaleStorage, IAsyncDisposable
                 """;
 
             using var checkCommand = new NpgsqlCommand(checkHypertableSql, connection);
-            var result = await checkCommand.ExecuteScalarAsync().ConfigureAwait(false);
+            var result = await checkCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
             var hypertableExists = result != null && (bool)result;
 
             if (!hypertableExists)
             {
                 var createHypertableSql = $"SELECT create_hypertable('public.{_settings.TableName}', 'timestamp', chunk_time_interval => INTERVAL '1 hour');";
                 using var hypertableCommand = new NpgsqlCommand(createHypertableSql, connection);
-                await hypertableCommand.ExecuteNonQueryAsync().ConfigureAwait(false);
+                await hypertableCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
                 _logger.LogInformation("TimescaleDB hypertable created for table {TableName}", _settings.TableName);
             }
