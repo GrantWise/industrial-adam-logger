@@ -17,8 +17,7 @@
     
     <!-- Industrial Communication -->
     <PackageReference Include="NModbus" Version="3.0.72" />
-    <PackageReference Include="MQTTnet" Version="$(MQTTnetVersion)" />
-    <PackageReference Include="MQTTnet.Extensions.ManagedClient" Version="$(MQTTnetVersion)" />
+    <PackageReference Include="MQTTnet" Version="4.3.7.1207" />
 
     <!-- Time Series Storage -->
     <PackageReference Include="Npgsql" Version="8.0.5" />

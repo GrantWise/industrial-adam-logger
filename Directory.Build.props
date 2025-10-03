@@ -49,7 +49,7 @@
     <FluentAssertionsVersion>7.0.0</FluentAssertionsVersion>
     <MoqVersion>4.20.72</MoqVersion>
     <MicrosoftCodeAnalysisNetAnalyzersVersion>9.0.0</MicrosoftCodeAnalysisNetAnalyzersVersion>
-    <MQTTnetVersion>5.0.1</MQTTnetVersion>
+    <MQTTnetVersion>4.3.7.1207</MQTTnetVersion>
   </PropertyGroup>
 
   <!-- Common Package References for all projects -->
