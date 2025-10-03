@@ -35,6 +35,7 @@ public sealed class TimescaleStorage : ITimescaleStorage, IAsyncDisposable
     private DateTimeOffset? _lastSuccessfulWrite;
     private string? _lastError;
     private readonly object _healthLock = new();
+    private int _cachedDeadLetterQueueSize = 0;
 
     // Performance metrics
     private long _totalRetryAttempts;
@@ -238,7 +239,7 @@ public sealed class TimescaleStorage : ITimescaleStorage, IAsyncDisposable
                 LastError = _lastError,
                 PendingWrites = _writeChannel.Reader.CanCount ? _writeChannel.Reader.Count : 0,
                 TotalRetryAttempts = Interlocked.Read(ref _totalRetryAttempts),
-                DeadLetterQueueSize = _deadLetterQueue?.GetQueueSizeAsync().GetAwaiter().GetResult() ?? 0,
+                DeadLetterQueueSize = _cachedDeadLetterQueueSize,
                 TotalSuccessfulBatches = Interlocked.Read(ref _totalSuccessfulBatches),
                 TotalFailedBatches = Interlocked.Read(ref _totalFailedBatches),
                 AverageBatchLatencyMs = avgLatency,
@@ -447,6 +448,19 @@ public sealed class TimescaleStorage : ITimescaleStorage, IAsyncDisposable
             {
                 _deadLetterQueue.AddFailedBatch(readings, ex, retryAttempts - 1);
                 _logger.LogWarning("Added failed batch of {Count} readings to dead letter queue", readings.Count);
+
+                // Update cached DLQ size (best effort, non-blocking)
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        _cachedDeadLetterQueueSize = await _deadLetterQueue.GetQueueSizeAsync();
+                    }
+                    catch
+                    {
+                        // Ignore errors updating cache
+                    }
+                });
             }
             else
             {
@@ -586,6 +600,9 @@ public sealed class TimescaleStorage : ITimescaleStorage, IAsyncDisposable
                 {
                     _logger.LogInformation("Processed {ProcessedCount} batches from dead letter queue", processedCount);
                 }
+
+                // Update cached DLQ size for health status
+                _cachedDeadLetterQueueSize = await _deadLetterQueue.GetQueueSizeAsync();
 
                 // Wait before next processing cycle
                 await Task.Delay(TimeSpan.FromMinutes(1), _backgroundCts.Token);
