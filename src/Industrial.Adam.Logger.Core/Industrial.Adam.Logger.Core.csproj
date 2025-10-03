@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Project-specific Properties -->
+    <PackageId>Industrial.Adam.Logger.Core</PackageId>
+    <Description>Simplified industrial-grade ADAM device data acquisition core. Focused on reliability and maintainability.</Description>
+    <PackageTags>industrial;adam;modbus;data-acquisition;iot</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Core Dependencies Only -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="$(MicrosoftExtensionsVersion)" />
+    
+    <!-- Industrial Communication -->
+    <PackageReference Include="NModbus" Version="3.0.72" />
+    
+    <!-- Time Series Storage -->
+    <PackageReference Include="Npgsql" Version="8.0.5" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.10" />
+    
+    <!-- Retry Policies -->
+    <PackageReference Include="Polly" Version="$(PollyVersion)" />
+    
+    <!-- Required for data annotations -->
+    <PackageReference Include="System.ComponentModel.Annotations" Version="5.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Industrial.Adam.Logger.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

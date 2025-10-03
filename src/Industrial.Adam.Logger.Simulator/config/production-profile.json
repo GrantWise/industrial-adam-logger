@@ -1,0 +1,34 @@
+{
+  "ProductionProfile": {
+    "BaseRate": 120.0,
+    "RateVariation": 0.2,
+    "JobSizeMin": 1000,
+    "JobSizeMax": 5000,
+    "TimingSettings": {
+      "SetupDurationMinutes": 0.25,
+      "RampUpDurationSeconds": 30.0,
+      "RampDownDurationSeconds": 10.0,
+      "IdleBetweenJobsSeconds": 45.0,
+      "DigitalPulseWidthMs": 50.0
+    },
+    "RampSettings": {
+      "RampUpStartPercent": 20.0,
+      "RampUpEndPercent": 100.0,
+      "RampDownStartPercent": 100.0,
+      "RampDownEndPercent": 10.0
+    },
+    "StoppageSettings": {
+      "MinorStoppageProbability": 0.15,
+      "MajorStoppageProbability": 0.05,
+      "MinorStoppageMinSeconds": 30,
+      "MinorStoppageMaxSeconds": 120,
+      "MajorStoppageMinMinutes": 10,
+      "MajorStoppageMaxMinutes": 30
+    },
+    "ContinuousOperation": {
+      "Enabled": true,
+      "AutoRestartAfterJob": true,
+      "ResetCountersOnNewJob": true
+    }
+  }
+}

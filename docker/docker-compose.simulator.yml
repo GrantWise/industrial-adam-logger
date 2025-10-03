@@ -1,0 +1,104 @@
+services:
+  # ADAM-6051 Simulator 1
+  adam-simulator-1:
+    build:
+      context: ../src/Industrial.Adam.Logger.Simulator
+      dockerfile: Dockerfile
+    container_name: adam-simulator-1
+    restart: unless-stopped
+    ports:
+      - "5502:5502"  # Modbus TCP port
+      - "8081:8080"  # REST API port
+    environment:
+      - SimulatorSettings__DeviceId=SIM-6051-01
+      - SimulatorSettings__DeviceName=Production Line 1 Simulator
+      - SimulatorSettings__ModbusPort=5502
+      - SimulatorSettings__ApiPort=8080
+      - SimulatorSettings__DatabasePath=/app/data/simulator.db
+      - ProductionSettings__BaseRate=120
+      - ProductionSettings__RateVariation=0.1
+      - ASPNETCORE_ENVIRONMENT=Production
+    volumes:
+      - simulator1_data:/app/data
+      - ./simulator/logs/sim1:/app/logs
+    networks:
+      - adam_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/simulator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ADAM-6051 Simulator 2
+  adam-simulator-2:
+    build:
+      context: ../src/Industrial.Adam.Logger.Simulator
+      dockerfile: Dockerfile
+    container_name: adam-simulator-2
+    restart: unless-stopped
+    ports:
+      - "5503:5502"  # Modbus TCP port
+      - "8082:8080"  # REST API port
+    environment:
+      - SimulatorSettings__DeviceId=SIM-6051-02
+      - SimulatorSettings__DeviceName=Production Line 2 Simulator
+      - SimulatorSettings__ModbusPort=5502
+      - SimulatorSettings__ApiPort=8080
+      - SimulatorSettings__DatabasePath=/app/data/simulator.db
+      - ProductionSettings__BaseRate=90
+      - ProductionSettings__RateVariation=0.15
+      - ASPNETCORE_ENVIRONMENT=Production
+    volumes:
+      - simulator2_data:/app/data
+      - ./simulator/logs/sim2:/app/logs
+    networks:
+      - adam_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/simulator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ADAM-6051 Simulator 3
+  adam-simulator-3:
+    build:
+      context: ../src/Industrial.Adam.Logger.Simulator
+      dockerfile: Dockerfile
+    container_name: adam-simulator-3
+    restart: unless-stopped
+    ports:
+      - "5504:5502"  # Modbus TCP port
+      - "8083:8080"  # REST API port
+    environment:
+      - SimulatorSettings__DeviceId=SIM-6051-03
+      - SimulatorSettings__DeviceName=Packaging Line Simulator
+      - SimulatorSettings__ModbusPort=5502
+      - SimulatorSettings__ApiPort=8080
+      - SimulatorSettings__DatabasePath=/app/data/simulator.db
+      - ProductionSettings__BaseRate=60
+      - ProductionSettings__RateVariation=0.2
+      - ProductionSettings__MinorStoppageProbability=0.03
+      - ProductionSettings__MajorStoppageProbability=0.01
+      - ASPNETCORE_ENVIRONMENT=Production
+    volumes:
+      - simulator3_data:/app/data
+      - ./simulator/logs/sim3:/app/logs
+    networks:
+      - adam_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/simulator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  simulator1_data:
+    driver: local
+  simulator2_data:
+    driver: local
+  simulator3_data:
+    driver: local
+
+networks:
+  adam_network:
+    driver: bridge

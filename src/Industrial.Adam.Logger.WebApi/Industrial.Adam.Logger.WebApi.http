@@ -1,0 +1,6 @@
+@Industrial.Adam.Logger.WebApi_HostAddress = http://localhost:5187
+
+GET {{Industrial.Adam.Logger.WebApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

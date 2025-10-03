@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  # TimescaleDB - Time-series database for counter data
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: adam-timescaledb
+    environment:
+      POSTGRES_DB: adam_logger
+      POSTGRES_USER: industrial_system
+      POSTGRES_PASSWORD: ${TIMESCALEDB_PASSWORD:-IndustrialLogger2024!@#$}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./timescaledb/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U industrial_system -d adam_logger"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ADAM Logger Service - Data acquisition backend
+  adam-logger:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: adam-logger-service
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:5000
+      TimescaleDb__Host: timescaledb
+      TimescaleDb__Port: 5432
+      TimescaleDb__Database: adam_logger
+      TimescaleDb__Username: industrial_system
+      TimescaleDb__Password: ${TIMESCALEDB_PASSWORD:-IndustrialLogger2024!@#$}
+      Jwt__SecretKey: ${JWT_SECRET_KEY:-your-256-bit-secret-key-here-change-in-production}
+      Jwt__Issuer: ${JWT_ISSUER:-Industrial.Adam.Logger}
+      Jwt__Audience: ${JWT_AUDIENCE:-Industrial.Adam.Logger.API}
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  timescaledb_data:
+    driver: local
+
+networks:
+  default:
+    name: adam-logger-network

@@ -1,0 +1,53 @@
+### Test ADAM Logger Minimal API Endpoints
+### This file can be used with VS Code REST Client extension or similar tools
+
+### Variables
+@host = https://localhost:5001
+@hostDev = http://localhost:5000
+
+### Health Check - Basic
+GET {{hostDev}}/health
+Accept: application/json
+
+### Health Check - Detailed
+GET {{hostDev}}/health/detailed
+Accept: application/json
+
+### Health Check - Built-in ASP.NET Core
+GET {{hostDev}}/health/checks
+Accept: application/json
+
+### Get All Devices
+GET {{hostDev}}/devices
+Accept: application/json
+
+### Get Specific Device
+GET {{hostDev}}/devices/Device001
+Accept: application/json
+
+### Restart Device Connection  
+POST {{hostDev}}/devices/Device001/restart
+Content-Type: application/json
+
+### Get Latest Data from All Devices
+GET {{hostDev}}/data/latest
+Accept: application/json
+
+### Get Latest Data from Specific Device
+GET {{hostDev}}/data/latest/Device001
+Accept: application/json
+
+### Get Data Statistics
+GET {{hostDev}}/data/stats
+Accept: application/json
+
+### Get Configuration (Safe)
+GET {{hostDev}}/config
+Accept: application/json
+
+### Clear Data Cache
+DELETE {{hostDev}}/data/cache
+Accept: application/json
+
+### Swagger UI (when running in Development)
+### Open in browser: http://localhost:5000/

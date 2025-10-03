@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  
+  <!-- Global Properties - Applied to all projects -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    
+    <!-- Package Properties -->
+    <Authors>Industrial Systems</Authors>
+    <Company>Industrial Systems</Company>
+    <Copyright>Copyright © Industrial Systems</Copyright>
+    
+    <!-- Build Properties - Quality Enforcement -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsAsErrors />
+    <!-- TODO: Priority 5 - Remove IDE1006 from WarningsNotAsErrors after fixing naming violations -->
+    <WarningsNotAsErrors>IDE1006</WarningsNotAsErrors>
+    
+    <!-- Code Analysis -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <!-- TODO: Priority 5 - Enable after fixing naming convention violations -->
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    
+    <!-- Deterministic builds -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    
+    <!-- Source Link for debugging -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <!-- Common Package Versions -->
+  <PropertyGroup>
+    <MicrosoftExtensionsVersion>9.0.0</MicrosoftExtensionsVersion>
+    <MicrosoftAspNetCoreVersion>9.0.0</MicrosoftAspNetCoreVersion>
+    <MicrosoftEntityFrameworkCoreVersion>9.0.0</MicrosoftEntityFrameworkCoreVersion>
+    <NpgsqlVersion>9.0.0</NpgsqlVersion>
+    <PollyVersion>8.5.0</PollyVersion>
+    <SerilogVersion>9.0.0</SerilogVersion>
+    <XunitVersion>2.9.2</XunitVersion>
+    <FluentAssertionsVersion>7.0.0</FluentAssertionsVersion>
+    <MoqVersion>4.20.72</MoqVersion>
+    <MicrosoftCodeAnalysisNetAnalyzersVersion>9.0.0</MicrosoftCodeAnalysisNetAnalyzersVersion>
+  </PropertyGroup>
+
+  <!-- Common Package References for all projects -->
+  <ItemGroup>
+    <!-- Code Analysis - Applied to all projects -->
+    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="$(MicrosoftCodeAnalysisNetAnalyzersVersion)">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!-- Test Project Specific Settings -->
+  <PropertyGroup Condition="'$(IsTestProject)' == 'true' OR $(MSBuildProjectName.Contains('Test'))">
+    <IsPackable>false</IsPackable>
+    <!-- Test projects can have less strict documentation requirements -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- Infrastructure and WebApi Projects - Temporary Exceptions -->
+  <PropertyGroup Condition="$(MSBuildProjectName.Contains('Infrastructure')) OR $(MSBuildProjectName.Contains('WebApi'))">
+    <!-- TODO: Address XML documentation warnings in Infrastructure and WebApi projects -->
+    <!-- These projects currently have additional XML documentation warnings that need to be resolved -->
+    <!-- Priority 5 task: Complete missing implementations and resolve these warnings -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!-- Source Link for GitHub -->
+  <ItemGroup Condition="'$(PublishRepositoryUrl)' == 'true'">
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!-- Assembly Metadata -->
+  <PropertyGroup>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <FileVersion>2.0.0.0</FileVersion>
+    <Version>2.0.0</Version>
+  </PropertyGroup>
+
+</Project>
