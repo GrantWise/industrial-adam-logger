@@ -1,6 +1,12 @@
-# CLAUDE.md - AI Assistant Guide
+# CLAUDE.md
 
-This document provides guidance for the Claude AI assistant when working with the Industrial Counter repository. Its purpose is to ensure all contributions align with the project's architectural principles and quality standards.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+**Industrial ADAM Logger** - Industrial-grade data acquisition service that reads counter values from ADAM-6051 devices via Modbus TCP and persists time-series data to TimescaleDB with zero data loss guarantees.
+
+**Key Purpose:** Modbus TCP → TimescaleDB pipeline with dead letter queue reliability for 24/7 manufacturing operations.
 
 ## 1. Core Philosophy: Pragmatic Over Dogmatic
 
@@ -101,3 +107,294 @@ return {
 ```
 
 This principle applies to ALL industrial data: device readings, OEE calculations, system metrics, and dashboard displays.
+
+## 6. Common Commands
+
+### Build & Test
+```bash
+# Restore dependencies
+dotnet restore
+
+# Build entire solution
+dotnet build
+
+# Run all tests
+dotnet test
+
+# Run specific test project
+dotnet test src/Industrial.Adam.Logger.Core.Tests
+
+# Run specific test by name
+dotnet test --filter "FullyQualifiedName~DataProcessor"
+
+# Build in Release mode
+dotnet build -c Release
+```
+
+### Running the Application
+
+```bash
+# Run WebApi (REST API + Swagger)
+dotnet run --project src/Industrial.Adam.Logger.WebApi
+
+# Run Console host
+dotnet run --project src/Industrial.Adam.Logger.Console
+
+# Run with specific environment
+dotnet run --project src/Industrial.Adam.Logger.WebApi --environment Production
+```
+
+### Docker & Infrastructure
+
+```bash
+# Start TimescaleDB only
+cd docker
+docker-compose up -d timescaledb
+
+# Start everything (logger + database)
+docker-compose up -d
+
+# Start with simulators for testing
+docker-compose -f docker-compose.simulator.yml up -d
+
+# View logs
+docker-compose logs -f adam-logger
+
+# Stop all services
+docker-compose down
+```
+
+### Simulators (No Hardware Required)
+
+```bash
+# Start ADAM-6051 simulators
+./scripts/start-simulators.sh
+
+# Stop simulators
+./scripts/stop-simulators.sh
+
+# Simulators listen on ports 5502, 5503, 5504
+```
+
+### Benchmarks
+
+```bash
+# Run performance benchmarks
+dotnet run --project src/Industrial.Adam.Logger.Benchmarks -c Release
+```
+
+## 7. Architecture
+
+### Clean Architecture Layers
+
+**Domain Layer** (`Industrial.Adam.Logger.Core/Models/`)
+- `DeviceReading.cs` - Counter reading with timestamp and quality
+- `DeviceHealth.cs` - Device health status and diagnostics
+- `DataQuality.cs` - Enum for data quality (Good, Uncertain, Bad, Unavailable)
+
+**Application Layer** (`Industrial.Adam.Logger.Core/Processing/`)
+- `DataProcessor.cs` - Processes raw counter readings, handles overflow detection
+- `WindowedRateCalculator.cs` - Calculates production rate using sliding window
+- `CircularBuffer.cs` - Fixed-size buffer for windowed calculations
+
+**Infrastructure Layer** (`Industrial.Adam.Logger.Core/Storage/`, `Services/`)
+- `TimescaleStorage.cs` - TimescaleDB persistence with batching
+- `DeadLetterQueue.cs` - Ensures zero data loss on storage failures
+- `AdamLoggerService.cs` - Main background service orchestrating polling
+
+**Presentation Layer** (`Industrial.Adam.Logger.WebApi/`)
+- REST API endpoints for device status, health, and data queries
+- Swagger/OpenAPI documentation at `/swagger`
+- JWT authentication with CORS support
+
+### Key Design Patterns
+
+- **Background Service Pattern**: `AdamLoggerService` runs as hosted service
+- **Dead Letter Queue**: Failed database writes go to DLQ for retry
+- **Batching**: Readings batched before database insert (configurable batch size/timeout)
+- **Sliding Window**: Rate calculation uses circular buffer for smooth metrics
+- **Overflow Detection**: Handles 16-bit and 32-bit counter wraparounds
+
+### Configuration Structure
+
+All configuration in `appsettings.json`:
+
+```json
+{
+  "AdamLogger": {
+    "Devices": [/* Device configs */],
+    "TimescaleDb": {/* DB config */}
+  },
+  "Jwt": {/* JWT settings */},
+  "Cors": {/* CORS origins */}
+}
+```
+
+**Important**: Device configuration includes:
+- `DeviceId`, `IpAddress`, `Port` - Modbus connection
+- `PollIntervalMs` - How often to poll (default 1000ms)
+- `Channels[]` - Counter channels to read
+- `StartRegister`, `RegisterCount` - Modbus register mapping
+
+## 8. Testing Approach
+
+### Test Organization
+
+- **Unit Tests**: `Industrial.Adam.Logger.Core.Tests/`
+- **Integration Tests**: `Industrial.Adam.Logger.IntegrationTests/` (require TimescaleDB)
+- **Benchmarks**: `Industrial.Adam.Logger.Benchmarks/`
+
+### Running Tests
+
+```bash
+# All tests (some integration tests may fail without Docker)
+dotnet test
+
+# Unit tests only (no database required)
+dotnet test src/Industrial.Adam.Logger.Core.Tests
+
+# Integration tests (requires TimescaleDB running)
+dotnet test src/Industrial.Adam.Logger.IntegrationTests
+```
+
+**Note**: Integration tests require TimescaleDB running on localhost:5432. Start with `docker-compose up -d timescaledb` first.
+
+### Test Pattern: Arrange-Act-Assert
+
+```csharp
+[Fact]
+public void DataProcessor_Should_DetectOverflow()
+{
+    // Arrange
+    var processor = new DataProcessor();
+
+    // Act
+    var result = processor.Process(reading);
+
+    // Assert
+    result.Should().NotBeNull();
+    result.OverflowDetected.Should().BeTrue();
+}
+```
+
+## 9. Technology Stack
+
+- **.NET 9** with C# 13
+- **TimescaleDB** (PostgreSQL + time-series)
+- **NModbus** - Modbus TCP client
+- **Polly** - Retry policies
+- **Npgsql** - PostgreSQL driver
+- **xUnit** - Testing framework
+- **FluentAssertions** - Assertion library
+- **Moq** - Mocking framework
+
+### Build Quality Standards
+
+- `TreatWarningsAsErrors` enabled (except Infrastructure/WebApi - see Directory.Build.props)
+- All public APIs must have XML documentation
+- Code analysis enabled with latest analyzers
+- Deterministic builds for CI/CD
+- Source Link enabled for debugging
+
+## 10. API Endpoints
+
+Base URL: `http://localhost:5000`
+
+### Health Endpoints
+- `GET /health` - Basic health status
+- `GET /health/detailed` - Detailed health including database
+- `GET /health/checks` - ASP.NET Core health checks
+
+### Device Endpoints
+- `GET /devices` - List all configured devices and status
+- `GET /devices/{id}` - Get specific device status
+- `POST /devices/{id}/restart` - Restart device connection
+
+### Data Endpoints
+- `GET /data/latest` - Latest readings from all devices
+- `GET /data/latest/{deviceId}` - Latest readings for specific device
+- `GET /data/stats` - Data collection statistics
+
+Swagger UI: `http://localhost:5000/swagger`
+
+## 11. Hardware Configuration
+
+### ADAM-6051 Devices
+
+- **Model**: ADAM-6051 (16-channel digital input counter)
+- **Protocol**: Modbus TCP
+- **Default Port**: 502
+- **Register Mapping**:
+  - 32-bit counters use 2 consecutive registers (high word, low word)
+  - Default: Channel 0 = registers 0-1, Channel 1 = registers 2-3, etc.
+
+### Simulator Configuration
+
+Simulators mimic ADAM-6051 behavior for testing:
+- Listen on ports 5502, 5503, 5504
+- Generate realistic counter increments
+- Support all Modbus TCP commands
+- Configurable via command-line arguments
+
+## 12. Deployment
+
+### Production Checklist
+
+Before deploying:
+- [ ] Change all default passwords in `.env`
+- [ ] Generate secure JWT secret key (minimum 32 characters)
+- [ ] Update `appsettings.Production.json` with real device IPs
+- [ ] Configure firewall rules (Modbus TCP port 502, API port 5000)
+- [ ] Set up database backups
+- [ ] Configure monitoring/alerting
+- [ ] Review CORS allowed origins
+- [ ] Enable HTTPS
+
+### Environment Variables
+
+Use `docker/.env.template` as starting point:
+- `TIMESCALEDB_PASSWORD` - Database password
+- `JWT_SECRET_KEY` - JWT signing key
+- `JWT_ISSUER`, `JWT_AUDIENCE` - JWT claims
+- `CORS_ALLOWED_ORIGINS` - Comma-separated allowed origins
+
+## 13. Project Structure
+
+```
+industrial-adam-logger/
+├── src/
+│   ├── Industrial.Adam.Logger.Core/          # Core business logic
+│   │   ├── Models/                           # Domain models
+│   │   ├── Processing/                       # Data processing
+│   │   ├── Services/                         # Background services
+│   │   ├── Storage/                          # Persistence interfaces
+│   │   └── Configuration/                    # Config models
+│   ├── Industrial.Adam.Logger.Core.Tests/    # Unit tests
+│   ├── Industrial.Adam.Logger.WebApi/        # REST API host
+│   ├── Industrial.Adam.Logger.Console/       # Console host
+│   ├── Industrial.Adam.Logger.Simulator/     # Device simulators
+│   ├── Industrial.Adam.Logger.IntegrationTests/
+│   └── Industrial.Adam.Logger.Benchmarks/
+├── docker/                                   # Docker infrastructure
+│   ├── docker-compose.yml                    # Production compose
+│   ├── docker-compose.simulator.yml          # With simulators
+│   ├── Dockerfile                            # Multi-stage build
+│   └── timescaledb/                          # DB init scripts
+├── scripts/                                  # Automation scripts
+├── docs/                                     # Documentation
+├── Industrial.Adam.Logger.sln                # Solution file
+├── Directory.Build.props                     # Global build config
+└── CLAUDE.md                                 # This file
+```
+
+## 14. Migration Context
+
+This repository was extracted from a larger multi-module platform (`adam-6000-counter`) and is now a focused, single-purpose logger service. See `MIGRATION-SUMMARY.md` for details.
+
+**Removed dependencies**:
+- OEE calculation modules (moved to separate repo)
+- Equipment scheduling modules
+- Admin dashboard modules
+- External Security module (replaced with inline JWT in WebApi)
+
+The logger is now self-contained with no external service dependencies beyond TimescaleDB.
