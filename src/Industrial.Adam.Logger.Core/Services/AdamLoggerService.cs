@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using Industrial.Adam.Logger.Core.Configuration;
 using Industrial.Adam.Logger.Core.Devices;
 using Industrial.Adam.Logger.Core.Models;
@@ -23,7 +24,10 @@ public sealed class AdamLoggerService : IHostedService, IDisposable
     private readonly ITimescaleStorage _timescaleStorage;
     private readonly ConcurrentDictionary<string, DeviceReading> _lastReadings = new();
     private readonly SemaphoreSlim _startStopLock = new(1, 1);
+    private readonly Channel<DeviceReading> _readingChannel;
+    private readonly ChannelWriter<DeviceReading> _readingWriter;
     private CancellationTokenSource? _stoppingCts;
+    private Task? _processingTask;
     private DateTimeOffset? _actualStartTime;
     private bool _disposed;
 
@@ -44,6 +48,16 @@ public sealed class AdamLoggerService : IHostedService, IDisposable
         _healthTracker = healthTracker ?? throw new ArgumentNullException(nameof(healthTracker));
         _dataProcessor = dataProcessor ?? throw new ArgumentNullException(nameof(dataProcessor));
         _timescaleStorage = timescaleStorage ?? throw new ArgumentNullException(nameof(timescaleStorage));
+
+        // Initialize Channel for reading processing with backpressure support
+        // Unbounded channel to handle bursts from multiple devices
+        _readingChannel = Channel.CreateUnbounded<DeviceReading>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            AllowSynchronousContinuations = false
+        });
+        _readingWriter = _readingChannel.Writer;
 
         // Subscribe to device readings
         _devicePool.ReadingReceived += OnReadingReceived;
@@ -77,6 +91,9 @@ public sealed class AdamLoggerService : IHostedService, IDisposable
 
             // Create cancellation token for stopping
             _stoppingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            // Start background processing task for readings
+            _processingTask = Task.Run(() => ProcessReadingsAsync(_stoppingCts.Token), _stoppingCts.Token);
 
             // Add all configured devices to the pool
             _logger.LogInformation("Initializing {Count} devices", config.Devices.Count);
@@ -137,6 +154,21 @@ public sealed class AdamLoggerService : IHostedService, IDisposable
             // Stop all device polling
             await _devicePool.StopAllAsync().ConfigureAwait(false);
 
+            // Complete the channel to signal no more readings
+            _readingWriter.Complete();
+
+            // Wait for processing task to complete with timeout
+            if (_processingTask != null)
+            {
+                var completed = await Task.WhenAny(_processingTask, Task.Delay(TimeSpan.FromSeconds(5), cancellationToken))
+                    .ConfigureAwait(false) == _processingTask;
+
+                if (!completed)
+                {
+                    _logger.LogWarning("Processing task did not complete within 5 seconds");
+                }
+            }
+
             // Force flush any pending data and process dead letter queue
             var flushResult = await _timescaleStorage.ForceFlushAsync(cancellationToken).ConfigureAwait(false);
             if (!flushResult)
@@ -161,46 +193,82 @@ public sealed class AdamLoggerService : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// Handle device reading events
+    /// Handle device reading events - writes to channel for background processing
     /// </summary>
-    private async void OnReadingReceived(DeviceReading reading)
+    private void OnReadingReceived(DeviceReading reading)
     {
+        // Non-blocking write to channel
+        // TryWrite returns false if channel is full (shouldn't happen with unbounded channel)
+        if (!_readingWriter.TryWrite(reading))
+        {
+            _logger.LogWarning(
+                "Failed to queue reading from {DeviceId} channel {Channel} - channel may be closed",
+                reading.DeviceId, reading.Channel);
+        }
+    }
+
+    /// <summary>
+    /// Background task that processes readings from the channel
+    /// </summary>
+    private async Task ProcessReadingsAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Starting reading processing task");
+
         try
         {
-            // Get previous reading for rate calculation
-            var channelKey = GetChannelKey(reading.DeviceId, reading.Channel);
-            _lastReadings.TryGetValue(channelKey, out var previousReading);
-
-            // Process the reading
-            var processedReading = _dataProcessor.ProcessReading(reading, previousReading);
-
-            // Store the processed reading for next time
-            _lastReadings[channelKey] = processedReading;
-
-            // Log any quality issues
-            if (processedReading.Quality != DataQuality.Good)
+            // Read from channel until it's completed
+            await foreach (var reading in _readingChannel.Reader.ReadAllAsync(cancellationToken))
             {
-                _logger.LogWarning(
-                    "Device {DeviceId} channel {Channel}: Quality={Quality}, Value={Value}, Rate={Rate}",
-                    processedReading.DeviceId, processedReading.Channel,
-                    processedReading.Quality, processedReading.ProcessedValue, processedReading.Rate);
+                try
+                {
+                    // Get previous reading for rate calculation
+                    var channelKey = GetChannelKey(reading.DeviceId, reading.Channel);
+                    _lastReadings.TryGetValue(channelKey, out var previousReading);
+
+                    // Process the reading
+                    var processedReading = _dataProcessor.ProcessReading(reading, previousReading);
+
+                    // Store the processed reading for next time
+                    _lastReadings[channelKey] = processedReading;
+
+                    // Log any quality issues
+                    if (processedReading.Quality != DataQuality.Good)
+                    {
+                        _logger.LogWarning(
+                            "Device {DeviceId} channel {Channel}: Quality={Quality}, Value={Value}, Rate={Rate}",
+                            processedReading.DeviceId, processedReading.Channel,
+                            processedReading.Quality, processedReading.ProcessedValue, processedReading.Rate);
+                    }
+
+                    // Write to TimescaleDB
+                    await _timescaleStorage.WriteReadingAsync(processedReading, cancellationToken).ConfigureAwait(false);
+
+                    // Log high-frequency updates at debug level
+                    _logger.LogDebug(
+                        "Processed reading from {DeviceId} channel {Channel}: Value={Value}, Rate={Rate}",
+                        processedReading.DeviceId, processedReading.Channel,
+                        processedReading.ProcessedValue, processedReading.Rate);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "Error processing reading from device {DeviceId} channel {Channel}",
+                        reading.DeviceId, reading.Channel);
+                    // Continue processing other readings
+                }
             }
-
-            // Write to InfluxDB
-            await _timescaleStorage.WriteReadingAsync(processedReading).ConfigureAwait(false);
-
-            // Log high-frequency updates at debug level
-            _logger.LogDebug(
-                "Processed reading from {DeviceId} channel {Channel}: Value={Value}, Rate={Rate}",
-                processedReading.DeviceId, processedReading.Channel,
-                processedReading.ProcessedValue, processedReading.Rate);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("Reading processing task cancelled");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex,
-                "Error processing reading from device {DeviceId} channel {Channel}",
-                reading.DeviceId, reading.Channel);
+            _logger.LogError(ex, "Fatal error in reading processing task");
+            throw;
         }
+
+        _logger.LogInformation("Reading processing task completed");
     }
 
     /// <summary>
