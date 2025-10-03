@@ -12,7 +12,7 @@ namespace Industrial.Adam.Logger.Core.Devices;
 /// <summary>
 /// Manages a single Modbus TCP connection with industrial-grade reliability
 /// </summary>
-public sealed class ModbusDeviceConnection : IDisposable
+public sealed class ModbusDeviceConnection : IAsyncDisposable, IDisposable
 {
     private readonly DeviceConfig _config;
     private readonly ILogger<ModbusDeviceConnection> _logger;
@@ -280,19 +280,29 @@ public sealed class ModbusDeviceConnection : IDisposable
     }
 
     /// <summary>
-    /// Dispose of connection resources
+    /// Asynchronously dispose of connection resources
     /// </summary>
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;
 
         _disposed = true;
 
-        // Synchronous disconnect for disposal
-        Task.Run(async () => await DisconnectAsync()).Wait(TimeSpan.FromSeconds(5));
+        // Async disconnect for disposal
+        await DisconnectAsync().ConfigureAwait(false);
 
         _connectionLock.Dispose();
+    }
+
+    /// <summary>
+    /// Dispose of connection resources (synchronous fallback)
+    /// </summary>
+    public void Dispose()
+    {
+        // Use synchronous disposal pattern - call async version and block
+        // This is acceptable as a fallback for consumers that don't support IAsyncDisposable
+        DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5));
     }
 }
 

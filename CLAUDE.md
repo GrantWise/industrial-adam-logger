@@ -28,6 +28,7 @@ Refer to the official documentation for detailed standards. Your work must adher
 - **Architecture**: See `docs/architecture_guide.md` for details on our Clean Architecture, CQRS, and DDD patterns.
 - **Development**: See `docs/development_standards.md` for unified backend and frontend standards.
 - **Technical Stack**: See `docs/technical_specification.md` for the list of approved technologies.
+- **Git Workflow**: See `GITHUB-WORKFLOW.md` for the definitive GitHub workflow, branching strategy, and commit conventions.
 
 ## 3. Debugging & Test Fixing Process
 

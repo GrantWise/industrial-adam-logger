@@ -17,7 +17,7 @@ namespace Industrial.Adam.Logger.Core.Storage;
 /// <summary>
 /// Stores device readings in TimescaleDB (PostgreSQL with TimescaleDB extension)
 /// </summary>
-public sealed class TimescaleStorage : ITimescaleStorage
+public sealed class TimescaleStorage : ITimescaleStorage, IAsyncDisposable
 {
     private readonly ILogger<TimescaleStorage> _logger;
     private readonly TimescaleSettings _settings;
@@ -35,6 +35,7 @@ public sealed class TimescaleStorage : ITimescaleStorage
     private DateTimeOffset? _lastSuccessfulWrite;
     private string? _lastError;
     private readonly object _healthLock = new();
+    private int _cachedDeadLetterQueueSize = 0;
 
     // Performance metrics
     private long _totalRetryAttempts;
@@ -103,6 +104,9 @@ public sealed class TimescaleStorage : ITimescaleStorage
             _deadLetterQueue = new DeadLetterQueue(_logger, _settings.DeadLetterQueuePath);
         }
 
+        // Validate table name to prevent SQL injection
+        ValidateTableName(_settings.TableName);
+
         // Setup retry policy using Polly
         _retryPolicy = Policy
             .Handle<NpgsqlException>()
@@ -120,8 +124,16 @@ public sealed class TimescaleStorage : ITimescaleStorage
                         retryCount, _settings.MaxRetryAttempts, timeSpan.TotalMilliseconds, exception.Message);
                 });
 
-        // Initialize database schema
-        InitializeDatabaseAsync().GetAwaiter().GetResult();
+        // Initialize database schema with timeout
+        using var initCts = new CancellationTokenSource(TimeSpan.FromSeconds(_settings.DatabaseInitTimeoutSeconds ?? 30));
+        try
+        {
+            InitializeDatabaseAsync(initCts.Token).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException($"Database initialization timed out after {_settings.DatabaseInitTimeoutSeconds ?? 30} seconds");
+        }
 
         // Start background writer task
         _backgroundWriteTask = Task.Run(ProcessWritesAsync, _backgroundCts.Token);
@@ -238,7 +250,7 @@ public sealed class TimescaleStorage : ITimescaleStorage
                 LastError = _lastError,
                 PendingWrites = _writeChannel.Reader.CanCount ? _writeChannel.Reader.Count : 0,
                 TotalRetryAttempts = Interlocked.Read(ref _totalRetryAttempts),
-                DeadLetterQueueSize = _deadLetterQueue?.GetQueueSizeAsync().GetAwaiter().GetResult() ?? 0,
+                DeadLetterQueueSize = _cachedDeadLetterQueueSize,
                 TotalSuccessfulBatches = Interlocked.Read(ref _totalSuccessfulBatches),
                 TotalFailedBatches = Interlocked.Read(ref _totalFailedBatches),
                 AverageBatchLatencyMs = avgLatency,
@@ -250,17 +262,17 @@ public sealed class TimescaleStorage : ITimescaleStorage
     /// <summary>
     /// Initialize database schema and hypertable
     /// </summary>
-    private async Task InitializeDatabaseAsync()
+    private async Task InitializeDatabaseAsync(CancellationToken cancellationToken = default)
     {
         try
         {
             using var connection = new NpgsqlConnection(_connectionString);
-            await connection.OpenAsync().ConfigureAwait(false);
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
             // Create the table first
             var createTableSql = string.Format(_createTableSql, _settings.TableName);
             using var createCommand = new NpgsqlCommand(createTableSql, connection);
-            await createCommand.ExecuteNonQueryAsync().ConfigureAwait(false);
+            await createCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
             // Check if hypertable already exists, and create it if not
             var checkHypertableSql = $"""
@@ -271,14 +283,14 @@ public sealed class TimescaleStorage : ITimescaleStorage
                 """;
 
             using var checkCommand = new NpgsqlCommand(checkHypertableSql, connection);
-            var result = await checkCommand.ExecuteScalarAsync().ConfigureAwait(false);
+            var result = await checkCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
             var hypertableExists = result != null && (bool)result;
 
             if (!hypertableExists)
             {
                 var createHypertableSql = $"SELECT create_hypertable('public.{_settings.TableName}', 'timestamp', chunk_time_interval => INTERVAL '1 hour');";
                 using var hypertableCommand = new NpgsqlCommand(createHypertableSql, connection);
-                await hypertableCommand.ExecuteNonQueryAsync().ConfigureAwait(false);
+                await hypertableCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
                 _logger.LogInformation("TimescaleDB hypertable created for table {TableName}", _settings.TableName);
             }
@@ -447,6 +459,19 @@ public sealed class TimescaleStorage : ITimescaleStorage
             {
                 _deadLetterQueue.AddFailedBatch(readings, ex, retryAttempts - 1);
                 _logger.LogWarning("Added failed batch of {Count} readings to dead letter queue", readings.Count);
+
+                // Update cached DLQ size (best effort, non-blocking)
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        _cachedDeadLetterQueueSize = await _deadLetterQueue.GetQueueSizeAsync();
+                    }
+                    catch
+                    {
+                        // Ignore errors updating cache
+                    }
+                });
             }
             else
             {
@@ -587,6 +612,9 @@ public sealed class TimescaleStorage : ITimescaleStorage
                     _logger.LogInformation("Processed {ProcessedCount} batches from dead letter queue", processedCount);
                 }
 
+                // Update cached DLQ size for health status
+                _cachedDeadLetterQueueSize = await _deadLetterQueue.GetQueueSizeAsync();
+
                 // Wait before next processing cycle
                 await Task.Delay(TimeSpan.FromMinutes(1), _backgroundCts.Token);
             }
@@ -604,9 +632,9 @@ public sealed class TimescaleStorage : ITimescaleStorage
     }
 
     /// <summary>
-    /// Dispose resources
+    /// Asynchronously dispose resources
     /// </summary>
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;
@@ -620,17 +648,20 @@ public sealed class TimescaleStorage : ITimescaleStorage
         _writer.Complete();
 
         // Cancel background processing
-        _backgroundCts.Cancel();
+        await _backgroundCts.CancelAsync().ConfigureAwait(false);
 
         try
         {
             // Wait for background task to complete with configurable timeout
             var shutdownTimeout = TimeSpan.FromSeconds(_settings.ShutdownTimeoutSeconds);
-            if (!_backgroundWriteTask.Wait(shutdownTimeout))
-            {
-                _logger.LogWarning("Background write task did not complete within {TimeoutSeconds}s shutdown timeout",
-                    _settings.ShutdownTimeoutSeconds);
-            }
+            using var timeoutCts = new CancellationTokenSource(shutdownTimeout);
+
+            await _backgroundWriteTask.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Background write task did not complete within {TimeoutSeconds}s shutdown timeout",
+                _settings.ShutdownTimeoutSeconds);
         }
         catch (Exception ex)
         {
@@ -650,6 +681,16 @@ public sealed class TimescaleStorage : ITimescaleStorage
             "Retries={Retries}, DeadLetterQueue={DeadLetterSize}",
             healthStatus.TotalSuccessfulBatches, healthStatus.TotalFailedBatches,
             healthStatus.TotalRetryAttempts, healthStatus.DeadLetterQueueSize);
+    }
+
+    /// <summary>
+    /// Dispose resources (synchronous fallback)
+    /// </summary>
+    public void Dispose()
+    {
+        // Use synchronous disposal pattern - call async version and block
+        // This is acceptable as a fallback for consumers that don't support IAsyncDisposable
+        DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(_settings.ShutdownTimeoutSeconds + 5));
     }
 
     /// <summary>
@@ -695,6 +736,61 @@ public sealed class TimescaleStorage : ITimescaleStorage
         {
             _logger.LogError(ex, "Error during force flush operation");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Validate table name to prevent SQL injection
+    /// PostgreSQL table names must:
+    /// - Start with a letter or underscore
+    /// - Contain only letters, digits, underscores
+    /// - Be 1-63 characters long
+    /// - Not be a PostgreSQL reserved keyword
+    /// </summary>
+    private static void ValidateTableName(string tableName)
+    {
+        if (string.IsNullOrWhiteSpace(tableName))
+        {
+            throw new ArgumentException("Table name cannot be null or empty", nameof(tableName));
+        }
+
+        // Check length (PostgreSQL limit is 63 characters)
+        if (tableName.Length > 63)
+        {
+            throw new ArgumentException($"Table name '{tableName}' exceeds PostgreSQL maximum length of 63 characters", nameof(tableName));
+        }
+
+        // Check if starts with letter or underscore
+        if (!char.IsLetter(tableName[0]) && tableName[0] != '_')
+        {
+            throw new ArgumentException($"Table name '{tableName}' must start with a letter or underscore", nameof(tableName));
+        }
+
+        // Check if contains only valid characters (letters, digits, underscores)
+        if (!tableName.All(c => char.IsLetterOrDigit(c) || c == '_'))
+        {
+            throw new ArgumentException($"Table name '{tableName}' contains invalid characters. Only letters, digits, and underscores are allowed", nameof(tableName));
+        }
+
+        // Check for common SQL injection patterns
+        var lowerName = tableName.ToLowerInvariant();
+        if (lowerName.Contains("drop") || lowerName.Contains("delete") || lowerName.Contains("insert") ||
+            lowerName.Contains("update") || lowerName.Contains("select") || lowerName.Contains("--") ||
+            lowerName.Contains(";"))
+        {
+            throw new ArgumentException($"Table name '{tableName}' contains potentially dangerous SQL keywords or characters", nameof(tableName));
+        }
+
+        // Check against PostgreSQL reserved keywords that could be problematic
+        var reservedKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "user", "table", "index", "select", "insert", "update", "delete", "drop", "create", "alter",
+            "grant", "revoke", "commit", "rollback", "transaction", "database", "schema", "view", "trigger"
+        };
+
+        if (reservedKeywords.Contains(tableName))
+        {
+            throw new ArgumentException($"Table name '{tableName}' is a PostgreSQL reserved keyword and cannot be used", nameof(tableName));
         }
     }
 }

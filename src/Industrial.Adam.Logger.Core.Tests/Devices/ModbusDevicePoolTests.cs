@@ -220,12 +220,20 @@ public class ModbusDevicePoolTests : IDisposable
         // Act
         await _pool.AddDeviceAsync(config);
 
-        // Wait a bit for polling (won't actually connect in test)
-        await Task.Delay(200);
+        // Wait for polling (won't actually connect in test)
+        // Poll interval is 100ms, so wait up to 500ms for the reading to arrive
+        var timeout = TimeSpan.FromMilliseconds(500);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while (receivedReading == null && stopwatch.Elapsed < timeout)
+        {
+            await Task.Delay(50);
+        }
 
         // Assert
-        // In real scenario with connection, this would receive readings
-        receivedReading.Should().BeNull(); // No readings since we can't connect in test
+        // With data integrity improvements, we now receive Unavailable readings when connection fails
+        receivedReading.Should().NotBeNull("unavailable readings are now reported for transparency");
+        receivedReading!.Quality.Should().Be(DataQuality.Unavailable, "device connection failed");
+        receivedReading.DeviceId.Should().Be("TEST001");
     }
 
     [Fact]
