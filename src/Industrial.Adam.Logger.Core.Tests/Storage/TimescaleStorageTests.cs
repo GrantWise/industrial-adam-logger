@@ -19,7 +19,7 @@ public class TimescaleStorageTests : IDisposable
         _testSettings = new TimescaleSettings
         {
             Host = "localhost",
-            Port = 5432,
+            Port = 5433,  // Docker container port mapping
             Database = "adam_counters",
             Username = "adam_user",
             Password = "adam_password",
