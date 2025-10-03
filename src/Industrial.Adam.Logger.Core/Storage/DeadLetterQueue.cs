@@ -15,6 +15,7 @@ public sealed class DeadLetterQueue : IDisposable
     private readonly ConcurrentQueue<FailedBatch> _inMemoryQueue = new();
     private readonly Timer _persistenceTimer;
     private readonly SemaphoreSlim _persistenceLock = new(1, 1);
+    private readonly CancellationTokenSource _disposeCts = new();
     private volatile bool _disposed;
 
     private const int MaxInMemoryItems = 1000;
@@ -228,9 +229,10 @@ public sealed class DeadLetterQueue : IDisposable
     /// </summary>
     private void PersistPendingBatches(object? state)
     {
-        if (_disposed)
+        if (_disposed || _disposeCts.Token.IsCancellationRequested)
             return;
-        _ = Task.Run(PersistPendingBatchesAsync);
+
+        _ = Task.Run(PersistPendingBatchesAsync, _disposeCts.Token);
     }
 
     /// <summary>
@@ -294,7 +296,14 @@ public sealed class DeadLetterQueue : IDisposable
             return;
         _disposed = true;
 
+        // Signal cancellation to prevent new timer callbacks
+        _disposeCts.Cancel();
+
+        // Dispose timer and wait for any in-progress callbacks
         _persistenceTimer?.Dispose();
+
+        // Give a brief moment for any in-flight timer callbacks to check cancellation
+        Thread.Sleep(100);
 
         // Final persistence of remaining batches
         try
@@ -307,6 +316,7 @@ public sealed class DeadLetterQueue : IDisposable
         }
 
         _persistenceLock?.Dispose();
+        _disposeCts?.Dispose();
 
         _logger.LogInformation("Dead letter queue disposed");
     }
