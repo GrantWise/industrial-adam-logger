@@ -1,8 +1,5 @@
 using System.Collections.Concurrent;
-using System.Text;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.OpenApi;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Industrial.Adam.Logger.Core.Devices;
 using Industrial.Adam.Logger.Core.Extensions;

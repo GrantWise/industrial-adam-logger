@@ -6,12 +6,19 @@ using Microsoft.Extensions.Options;
 namespace Industrial.Adam.Logger.WebApi.Authentication;
 
 /// <summary>
-/// Handles API key authentication for industrial IoT services
+/// Handles API key authentication for industrial IoT services with comprehensive audit logging
 /// </summary>
 public class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAuthenticationOptions>
 {
     private readonly IApiKeyValidator _keyValidator;
 
+    /// <summary>
+    /// Initialize API key authentication handler
+    /// </summary>
+    /// <param name="options">Authentication options</param>
+    /// <param name="logger">Logger factory</param>
+    /// <param name="encoder">URL encoder</param>
+    /// <param name="keyValidator">API key validator</param>
     public ApiKeyAuthenticationHandler(
         IOptionsMonitor<ApiKeyAuthenticationOptions> options,
         ILoggerFactory logger,
@@ -22,6 +29,9 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAuthentic
         _keyValidator = keyValidator ?? throw new ArgumentNullException(nameof(keyValidator));
     }
 
+    /// <summary>
+    /// Handle authentication attempt
+    /// </summary>
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         // Check for API key header
@@ -33,7 +43,7 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAuthentic
         var apiKey = apiKeyHeaderValues.FirstOrDefault();
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            Logger.LogWarning("Empty API key provided");
+            LogAuthenticationFailure("Empty API key provided", null);
             return AuthenticateResult.Fail("Invalid API Key");
         }
 
@@ -42,7 +52,7 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAuthentic
         if (keyInfo == null)
         {
             var keyPrefix = apiKey.Length > 8 ? apiKey[..8] : apiKey;
-            Logger.LogWarning("Invalid API key attempted: {KeyPrefix}***", keyPrefix);
+            LogAuthenticationFailure("Invalid or expired API key", keyPrefix);
             return AuthenticateResult.Fail("Invalid API Key");
         }
 
@@ -59,12 +69,22 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAuthentic
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, Scheme.Name);
 
-        Logger.LogInformation("API key authenticated successfully: {KeyName} ({KeyId})",
-            keyInfo.Name, keyInfo.Id);
+        // Comprehensive success logging for audit trail
+        Logger.LogInformation(
+            "API key authenticated successfully: {KeyName} ({KeyId}) from {IpAddress} for {RequestPath} {RequestMethod} at {Timestamp}",
+            keyInfo.Name,
+            keyInfo.Id,
+            Request.HttpContext.Connection.RemoteIpAddress,
+            Request.Path,
+            Request.Method,
+            DateTimeOffset.UtcNow);
 
         return AuthenticateResult.Success(ticket);
     }
 
+    /// <summary>
+    /// Handle challenge (401 Unauthorized)
+    /// </summary>
     protected override Task HandleChallengeAsync(AuthenticationProperties properties)
     {
         Response.StatusCode = 401;
@@ -72,9 +92,27 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAuthentic
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Handle forbidden (403 Forbidden)
+    /// </summary>
     protected override Task HandleForbiddenAsync(AuthenticationProperties properties)
     {
         Response.StatusCode = 403;
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Log authentication failure with comprehensive audit information
+    /// </summary>
+    private void LogAuthenticationFailure(string reason, string? keyPrefix)
+    {
+        Logger.LogWarning(
+            "Authentication failed: {Reason} | Key: {KeyPrefix}*** | IP: {IpAddress} | Path: {RequestPath} {RequestMethod} | Time: {Timestamp}",
+            reason,
+            keyPrefix ?? "none",
+            Request.HttpContext.Connection.RemoteIpAddress,
+            Request.Path,
+            Request.Method,
+            DateTimeOffset.UtcNow);
     }
 }
