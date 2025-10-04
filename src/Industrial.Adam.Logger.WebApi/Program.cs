@@ -9,6 +9,7 @@ using Industrial.Adam.Logger.Core.Extensions;
 using Industrial.Adam.Logger.Core.Models;
 using Industrial.Adam.Logger.Core.Services;
 using Industrial.Adam.Logger.Core.Storage;
+using Industrial.Adam.Logger.WebApi.Authentication;
 using Industrial.Adam.Logger.WebApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -29,13 +30,13 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
-    // JWT Authentication configuration
-    c.AddSecurityDefinition("Bearer", new()
+    // API Key Authentication configuration
+    c.AddSecurityDefinition("ApiKey", new()
     {
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
-        Scheme = "bearer",
-        BearerFormat = "JWT",
-        Description = "Enter JWT Bearer token to access protected endpoints"
+        Type = SecuritySchemeType.ApiKey,
+        In = ParameterLocation.Header,
+        Name = "X-API-Key",
+        Description = "Enter your API key to access protected endpoints"
     });
 
     c.AddSecurityRequirement(new()
@@ -45,8 +46,8 @@ builder.Services.AddSwaggerGen(c =>
             {
                 Reference = new()
                 {
-                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
-                    Id = "Bearer"
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "ApiKey"
                 }
             },
             Array.Empty<string>()
@@ -68,30 +69,13 @@ builder.Services.AddSwaggerGen(c =>
     }
 });
 
-// Add simple JWT authentication
-var jwtSettings = builder.Configuration.GetSection("Jwt");
-var secretKey = jwtSettings["SecretKey"] ?? throw new InvalidOperationException("JWT SecretKey is required");
-var key = Encoding.UTF8.GetBytes(secretKey);
+// Add API key validator
+builder.Services.AddSingleton<IApiKeyValidator, FileBasedApiKeyValidator>();
 
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
-{
-    options.TokenValidationParameters = new TokenValidationParameters
-    {
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = true,
-        ValidateIssuerSigningKey = true,
-        ValidIssuer = jwtSettings["Issuer"],
-        ValidAudience = jwtSettings["Audience"],
-        IssuerSigningKey = new SymmetricSecurityKey(key),
-        ClockSkew = TimeSpan.Zero
-    };
-});
+// Add authentication with API key support (primary) and JWT (future web UI)
+builder.Services.AddAuthentication(ApiKeyAuthenticationOptions.DefaultScheme)
+    .AddScheme<ApiKeyAuthenticationOptions, ApiKeyAuthenticationHandler>(
+        ApiKeyAuthenticationOptions.DefaultScheme, null);
 
 builder.Services.AddAuthorization();
 

@@ -1,0 +1,18 @@
+{
+  "keys": [
+    {
+      "id": "production-service-1",
+      "key": "IND-ADAM-PROD-REPLACE-WITH-STRONG-KEY",
+      "name": "Production Line 1 Service",
+      "expiresAt": "2025-12-31T23:59:59Z",
+      "permissions": ["read", "restart"]
+    },
+    {
+      "id": "monitoring-dashboard",
+      "key": "IND-ADAM-MONITOR-REPLACE-WITH-STRONG-KEY",
+      "name": "Monitoring Dashboard",
+      "expiresAt": null,
+      "permissions": ["read"]
+    }
+  ]
+}
