@@ -20,7 +20,10 @@ namespace Industrial.Adam.Logger.Core.Services;
 public sealed class MqttLoggerService : BackgroundService
 {
     private readonly IMqttClientWrapper _mqttClient;
+    private readonly MqttConnectionFactory _connectionFactory;
+    private readonly TopicSubscriptionManager _subscriptionManager;
     private readonly MqttMessageProcessor _messageProcessor;
+    private readonly MqttHealthMonitor _healthMonitor;
     private readonly ITimescaleStorage _storage;
     private readonly DeadLetterQueue _deadLetterQueue;
     private readonly LoggerConfiguration _config;
@@ -31,31 +34,34 @@ public sealed class MqttLoggerService : BackgroundService
     private readonly int _batchSize;
     private readonly TimeSpan _batchTimeout;
 
-    // Statistics tracking
-    private long _messagesReceived;
-    private long _messagesProcessed;
-    private long _messagesFailed;
-    private DateTimeOffset _serviceStartTime;
-
     /// <summary>
     /// Initializes a new instance of the <see cref="MqttLoggerService"/> class.
     /// </summary>
     /// <param name="mqttClient">MQTT client wrapper for broker communication.</param>
+    /// <param name="connectionFactory">Factory for creating MQTT connection options.</param>
+    /// <param name="subscriptionManager">Manager for topic subscriptions and routing.</param>
     /// <param name="messageProcessor">Message processor for payload parsing.</param>
+    /// <param name="healthMonitor">Health and statistics monitor.</param>
     /// <param name="storage">TimescaleDB storage interface.</param>
     /// <param name="deadLetterQueue">Dead letter queue for failed storage operations.</param>
     /// <param name="config">Logger configuration.</param>
     /// <param name="logger">Logger instance for diagnostic output.</param>
     public MqttLoggerService(
         IMqttClientWrapper mqttClient,
+        MqttConnectionFactory connectionFactory,
+        TopicSubscriptionManager subscriptionManager,
         MqttMessageProcessor messageProcessor,
+        MqttHealthMonitor healthMonitor,
         ITimescaleStorage storage,
         DeadLetterQueue deadLetterQueue,
         IOptions<LoggerConfiguration> config,
         ILogger<MqttLoggerService> logger)
     {
         _mqttClient = mqttClient ?? throw new ArgumentNullException(nameof(mqttClient));
+        _connectionFactory = connectionFactory ?? throw new ArgumentNullException(nameof(connectionFactory));
+        _subscriptionManager = subscriptionManager ?? throw new ArgumentNullException(nameof(subscriptionManager));
         _messageProcessor = messageProcessor ?? throw new ArgumentNullException(nameof(messageProcessor));
+        _healthMonitor = healthMonitor ?? throw new ArgumentNullException(nameof(healthMonitor));
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _deadLetterQueue = deadLetterQueue ?? throw new ArgumentNullException(nameof(deadLetterQueue));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
@@ -78,8 +84,6 @@ public sealed class MqttLoggerService : BackgroundService
     /// <param name="stoppingToken">Cancellation token to signal service shutdown.</param>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _serviceStartTime = DateTimeOffset.UtcNow;
-
         if (_config.Mqtt == null || _config.MqttDevices.Count == 0)
         {
             _logger.LogInformation("MQTT not configured, service will remain idle");
@@ -90,13 +94,16 @@ public sealed class MqttLoggerService : BackgroundService
 
         try
         {
+            // Register devices with subscription manager for topic routing
+            _subscriptionManager.RegisterDevices(_config.MqttDevices);
+
             // Wire up event handlers
             _mqttClient.ApplicationMessageReceivedAsync += OnMessageReceivedAsync;
             _mqttClient.ConnectedAsync += OnConnectedAsync;
             _mqttClient.DisconnectedAsync += OnDisconnectedAsync;
 
-            // Build managed client options
-            var managedOptions = BuildManagedClientOptions();
+            // Build managed client options using factory
+            var managedOptions = _connectionFactory.CreateManagedClientOptions(_config.Mqtt);
 
             // Start MQTT client
             await _mqttClient.StartAsync(managedOptions, stoppingToken).ConfigureAwait(false);
@@ -122,85 +129,35 @@ public sealed class MqttLoggerService : BackgroundService
         }
     }
 
-    private ManagedMqttClientOptions BuildManagedClientOptions()
-    {
-        var mqtt = _config.Mqtt!;
-
-        var clientOptionsBuilder = new MqttClientOptionsBuilder()
-            .WithClientId(mqtt.ClientId)
-            .WithTcpServer(mqtt.BrokerHost, mqtt.BrokerPort)
-            .WithKeepAlivePeriod(TimeSpan.FromSeconds(mqtt.KeepAlivePeriodSeconds));
-
-        // Add credentials if configured
-        if (!string.IsNullOrEmpty(mqtt.Username))
-        {
-            clientOptionsBuilder.WithCredentials(mqtt.Username, mqtt.Password);
-        }
-
-        // Add TLS if configured
-        if (mqtt.UseTls)
-        {
-            clientOptionsBuilder.WithTlsOptions(o =>
-            {
-                o.WithCertificateValidationHandler(_ => true); // TODO: Proper certificate validation in production
-                o.WithSslProtocols(System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13);
-            });
-        }
-
-        var clientOptions = clientOptionsBuilder.Build();
-
-        return new ManagedMqttClientOptionsBuilder()
-            .WithClientOptions(clientOptions)
-            .WithAutoReconnectDelay(TimeSpan.FromSeconds(mqtt.ReconnectDelaySeconds))
-            .Build();
-    }
-
     private async Task SubscribeToTopicsAsync(CancellationToken cancellationToken)
     {
-        // Collect all unique topics from all devices
-        var allTopics = _config.MqttDevices
-            .Where(d => d.Enabled)
-            .SelectMany(d => d.Topics)
-            .Distinct()
-            .ToList();
+        // Build topic filters with per-device QoS support
+        var topicFilters = _subscriptionManager.BuildTopicFilters(
+            _config.MqttDevices,
+            _config.Mqtt!.QualityOfServiceLevel);
 
-        if (allTopics.Count == 0)
+        if (topicFilters.Count == 0)
         {
             _logger.LogWarning("No topics configured for subscription");
             return;
         }
 
-        var qos = _config.Mqtt!.QualityOfServiceLevel switch
-        {
-            0 => MQTTnet.Protocol.MqttQualityOfServiceLevel.AtMostOnce,
-            1 => MQTTnet.Protocol.MqttQualityOfServiceLevel.AtLeastOnce,
-            2 => MQTTnet.Protocol.MqttQualityOfServiceLevel.ExactlyOnce,
-            _ => MQTTnet.Protocol.MqttQualityOfServiceLevel.AtLeastOnce
-        };
-
-        var topicFilters = allTopics.Select(topic =>
-            new MqttTopicFilterBuilder()
-                .WithTopic(topic)
-                .WithQualityOfServiceLevel(qos)
-                .Build()
-        ).ToList();
-
         await _mqttClient.SubscribeAsync(topicFilters, cancellationToken).ConfigureAwait(false);
 
-        _logger.LogInformation("Subscribed to {TopicCount} topics with QoS {Qos}", topicFilters.Count, qos);
+        _logger.LogInformation("Subscribed to {TopicCount} topics", topicFilters.Count);
     }
 
     private async Task OnMessageReceivedAsync(MqttApplicationMessageReceivedEventArgs e)
     {
-        Interlocked.Increment(ref _messagesReceived);
+        var topic = e.ApplicationMessage.Topic;
+        _healthMonitor.RecordMessageReceived(topic);
 
         try
         {
-            var topic = e.ApplicationMessage.Topic;
             var payload = e.ApplicationMessage.PayloadSegment;
 
-            // Find matching device configuration
-            var deviceConfig = FindDeviceForTopic(topic);
+            // Find matching device configuration using subscription manager
+            var deviceConfig = _subscriptionManager.FindDeviceForTopic(topic);
             if (deviceConfig == null)
             {
                 _logger.LogDebug("No device configured for topic {Topic}", topic);
@@ -211,19 +168,19 @@ public sealed class MqttLoggerService : BackgroundService
             var reading = _messageProcessor.ProcessMessage(deviceConfig, topic, payload);
             if (reading == null)
             {
-                Interlocked.Increment(ref _messagesFailed);
+                _healthMonitor.RecordMessageFailed(topic);
                 _logger.LogWarning("Failed to process message from topic {Topic}", topic);
                 return;
             }
 
             // Enqueue for batching
             await _readingChannel.Writer.WriteAsync(reading).ConfigureAwait(false);
-            Interlocked.Increment(ref _messagesProcessed);
+            _healthMonitor.RecordMessageProcessed(topic);
         }
         catch (Exception ex)
         {
-            Interlocked.Increment(ref _messagesFailed);
-            _logger.LogError(ex, "Error processing MQTT message from topic {Topic}", e.ApplicationMessage.Topic);
+            _healthMonitor.RecordMessageFailed(topic);
+            _logger.LogError(ex, "Error processing MQTT message from topic {Topic}", topic);
         }
     }
 
@@ -278,23 +235,6 @@ public sealed class MqttLoggerService : BackgroundService
         }
     }
 
-    private MqttDeviceConfig? FindDeviceForTopic(string topic)
-    {
-        // Find first enabled device with a matching topic filter
-        foreach (var device in _config.MqttDevices.Where(d => d.Enabled))
-        {
-            foreach (var topicFilter in device.Topics)
-            {
-                if (MqttTopicFilterComparer.Compare(topic, topicFilter) == MqttTopicFilterCompareResult.IsMatch)
-                {
-                    return device;
-                }
-            }
-        }
-
-        return null;
-    }
-
     private async Task ShutdownAsync()
     {
         _logger.LogInformation("Shutting down MQTT logger service");
@@ -307,11 +247,11 @@ public sealed class MqttLoggerService : BackgroundService
             // Stop MQTT client
             await _mqttClient.StopAsync().ConfigureAwait(false);
 
-            // Log final statistics
-            var uptime = DateTimeOffset.UtcNow - _serviceStartTime;
+            // Log final statistics from health monitor
+            var health = GetHealthStatus();
             _logger.LogInformation(
                 "MQTT service stopped. Uptime: {Uptime}, Messages: {Received} received, {Processed} processed, {Failed} failed",
-                uptime, _messagesReceived, _messagesProcessed, _messagesFailed);
+                health.Uptime, health.MessagesReceived, health.MessagesProcessed, health.MessagesFailed);
         }
         catch (Exception ex)
         {
@@ -325,50 +265,8 @@ public sealed class MqttLoggerService : BackgroundService
     /// <returns>Health information.</returns>
     public MqttServiceHealth GetHealthStatus()
     {
-        return new MqttServiceHealth
-        {
-            IsConnected = _mqttClient.IsConnected,
-            MessagesReceived = Interlocked.Read(ref _messagesReceived),
-            MessagesProcessed = Interlocked.Read(ref _messagesProcessed),
-            MessagesFailed = Interlocked.Read(ref _messagesFailed),
-            Uptime = DateTimeOffset.UtcNow - _serviceStartTime,
-            ConfiguredDevices = _config.MqttDevices.Count(d => d.Enabled)
-        };
+        return _healthMonitor.GetHealthStatus(
+            _mqttClient.IsConnected,
+            _config.MqttDevices.Count(d => d.Enabled));
     }
-}
-
-/// <summary>
-/// MQTT service health status information.
-/// </summary>
-public sealed record MqttServiceHealth
-{
-    /// <summary>
-    /// Whether MQTT client is currently connected to broker.
-    /// </summary>
-    public required bool IsConnected { get; init; }
-
-    /// <summary>
-    /// Total messages received from broker.
-    /// </summary>
-    public required long MessagesReceived { get; init; }
-
-    /// <summary>
-    /// Messages successfully processed and stored.
-    /// </summary>
-    public required long MessagesProcessed { get; init; }
-
-    /// <summary>
-    /// Messages that failed processing or storage.
-    /// </summary>
-    public required long MessagesFailed { get; init; }
-
-    /// <summary>
-    /// Service uptime duration.
-    /// </summary>
-    public required TimeSpan Uptime { get; init; }
-
-    /// <summary>
-    /// Number of enabled MQTT devices configured.
-    /// </summary>
-    public required int ConfiguredDevices { get; init; }
 }

@@ -49,6 +49,13 @@ public class MqttDeviceConfig
     public MqttDataType DataType { get; set; } = MqttDataType.UInt32;
 
     /// <summary>
+    /// Quality of Service level for this device's topics (0=AtMostOnce, 1=AtLeastOnce, 2=ExactlyOnce).
+    /// If null, uses global QoS from MqttSettings.
+    /// </summary>
+    [Range(0, 2, ErrorMessage = "QoS must be 0, 1, or 2")]
+    public int? QosLevel { get; set; } = null;
+
+    /// <summary>
     /// JSON path to extract device ID from payload (optional)
     /// If null, uses DeviceId from config
     /// Example: "$.device.id"

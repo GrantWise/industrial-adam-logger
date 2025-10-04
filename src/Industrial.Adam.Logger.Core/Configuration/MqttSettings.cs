@@ -66,6 +66,13 @@ public class MqttSettings
     public int MaxReconnectAttempts { get; set; } = 0;
 
     /// <summary>
+    /// Clean session flag - if true, broker discards previous session state on connect.
+    /// If false, broker maintains subscriptions and queued messages between connections.
+    /// Null uses MQTTnet default behavior.
+    /// </summary>
+    public bool? CleanSession { get; set; } = null;
+
+    /// <summary>
     /// Validate MQTT settings
     /// </summary>
     public ValidationResult Validate()

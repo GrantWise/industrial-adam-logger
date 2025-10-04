@@ -48,6 +48,56 @@ Add **industrial-grade MQTT data logging** capability to the existing Industrial
 
 ---
 
+## ⚠️ REFACTORING PHASE (Added After Code Review)
+
+**Date Added**: October 4, 2025
+**Reason**: Code review identified SRP violations and MQTT-specific architectural improvements
+
+### Refactoring Tasks (Before Phase 6)
+
+**Phase 5.5: Architecture Refactoring** (~2.25 days)
+
+1. **Extract MqttConnectionFactory** (~0.5 day)
+   - Create `MqttConnectionFactory` class in `Mqtt/` directory
+   - Move `BuildManagedClientOptions()` logic from `MqttLoggerService`
+   - Handles TLS configuration, credentials, QoS settings
+   - **Why**: Service should orchestrate, not build client options (SRP)
+
+2. **Create TopicSubscriptionManager** (~1 day)
+   - Create `TopicSubscriptionManager` class in `Mqtt/` directory
+   - Move `FindDeviceForTopic()` logic from service
+   - Build topic → device lookup dictionary at startup (O(1) vs O(n*m))
+   - Handle wildcard matching (`+` and `#`) compilation
+   - Support per-topic QoS configuration
+   - **Why**: Routing logic doesn't belong in service (SRP + Performance)
+
+3. **Create MqttHealthMonitor** (~0.5 day)
+   - Create `MqttHealthMonitor` class in `Mqtt/` directory
+   - Move statistics tracking from service (_messagesReceived, etc.)
+   - Track per-topic metrics (message rates, error rates)
+   - Provide `GetHealthStatus()` method
+   - **Why**: Health tracking should be separate concern (SRP)
+
+4. **Add MQTT-Specific Configuration** (~0.25 day)
+   - Add `QosLevel` property to `MqttDeviceConfig` (per-device QoS)
+   - Add `CleanSession` flag to `MqttSettings`
+   - Add topic hierarchy validation in `MqttDeviceConfig.Validate()`
+   - **Why**: MQTT-specific features not currently exposed
+
+5. **Update MqttLoggerService** (~0.25 day)
+   - Inject `MqttConnectionFactory`, `TopicSubscriptionManager`, `MqttHealthMonitor`
+   - Remove extracted logic, delegate to injected services
+   - Service becomes pure orchestration layer
+   - **Why**: Align with established AdamLoggerService pattern
+
+**Refactoring Commits**:
+- `refactor(mqtt): extract connection factory for SRP compliance`
+- `refactor(mqtt): add topic subscription manager with optimized routing`
+- `refactor(mqtt): separate health monitoring from service`
+- `feat(mqtt): add per-topic QoS and MQTT-specific configuration`
+
+---
+
 ## Architecture Overview
 
 ### High-Level Flow
