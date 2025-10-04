@@ -2,9 +2,14 @@
 
 export interface DeviceHealth {
   deviceId: string
-  status: 'Online' | 'Offline' | 'Error'
-  lastSeen: string
-  errorMessage?: string
+  isConnected: boolean
+  lastSuccessfulRead: string | null
+  consecutiveFailures: number
+  lastError: string | null
+  totalReads: number
+  successfulReads: number
+  successRate: number
+  isOffline: boolean
 }
 
 export interface DeviceReading {
@@ -41,20 +46,46 @@ export interface DeviceChannel {
 export interface HealthResponse {
   status: string
   timestamp: string
-  database?: {
-    connected: boolean
-    message?: string
-  }
-  mqtt?: {
-    connected: boolean
-    message?: string
+  components?: {
+    database?: {
+      status: string
+      connected: boolean
+    }
+    mqtt?: {
+      status: string
+      connected: boolean
+    }
+    service?: {
+      status: string
+      isRunning: boolean
+      startTime: string
+      uptime: string
+    }
+    devices?: {
+      status: string
+      total: number
+      connected: number
+      details: Record<string, DeviceHealthDetail>
+    }
   }
 }
 
+export interface DeviceHealthDetail {
+  deviceId: string
+  isConnected: boolean
+  lastSuccessfulRead: string | null
+  consecutiveFailures: number
+  lastError: string | null
+  totalReads: number
+  successfulReads: number
+  successRate: number
+  isOffline: boolean
+}
+
 export interface HealthDetailedResponse extends HealthResponse {
-  modbusDevices: DeviceHealth[]
-  mqttDevices: DeviceHealth[]
-  deadLetterQueue: {
+  modbusDevices?: DeviceHealth[]
+  mqttDevices?: DeviceHealth[]
+  deadLetterQueue?: {
     pendingCount: number
     oldestTimestamp?: string
   }

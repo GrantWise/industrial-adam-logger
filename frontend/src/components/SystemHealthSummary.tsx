@@ -25,13 +25,11 @@ export function SystemHealthSummary() {
     )
   }
 
-  const dbStatus = health.database?.connected ? 'Online' : 'Offline'
-  const mqttStatus = health.mqtt?.connected ? 'Online' : 'Offline'
+  const dbStatus = health.components?.database?.connected ? 'Online' : 'Offline'
+  const mqttStatus = health.components?.mqtt?.connected ? 'Online' : 'Offline'
   const dlqCount = health.deadLetterQueue?.pendingCount || 0
-  const totalDevices = (health.modbusDevices?.length || 0) + (health.mqttDevices?.length || 0)
-  const onlineDevices =
-    (health.modbusDevices?.filter((d) => d.status === 'Online').length || 0) +
-    (health.mqttDevices?.filter((d) => d.status === 'Online').length || 0)
+  const totalDevices = health.components?.devices?.total || 0
+  const onlineDevices = health.components?.devices?.connected || 0
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-4">

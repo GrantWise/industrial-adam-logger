@@ -24,8 +24,8 @@ export const healthApi = {
 
 // Device endpoints
 export const devicesApi = {
-  getDevices: () => apiClient.get<Device[]>('/devices'),
-  getDevice: (id: string) => apiClient.get<Device>(`/devices/${id}`),
+  getDevices: () => apiClient.get<Record<string, DeviceHealth>>('/devices'),
+  getDevice: (id: string) => apiClient.get<DeviceHealth>(`/devices/${id}`),
   restartDevice: (id: string) => apiClient.post(`/devices/${id}/restart`),
 }
 

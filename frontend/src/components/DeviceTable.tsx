@@ -1,6 +1,6 @@
 import { useHealthDetailed, useLatestData } from '@/api/hooks'
 import { StatusIndicator } from './StatusIndicator'
-import type { DeviceHealth, DeviceReading } from '@/api/types'
+import type { DeviceReading } from '@/api/types'
 import { formatDistanceToNow } from 'date-fns'
 import { Router, Wifi } from 'lucide-react'
 
@@ -16,10 +16,15 @@ export function DeviceTable() {
     )
   }
 
-  const allDevices = [
-    ...(health.modbusDevices || []).map((d) => ({ ...d, type: 'Modbus' as const })),
-    ...(health.mqttDevices || []).map((d) => ({ ...d, type: 'MQTT' as const })),
-  ]
+  // Get devices from health.components.devices.details
+  const deviceDetails = health.components?.devices?.details || {}
+  const allDevices = Object.values(deviceDetails).map((d) => ({
+    deviceId: d.deviceId,
+    status: d.isOffline ? ('Offline' as const) : d.isConnected ? ('Online' as const) : ('Error' as const),
+    lastSeen: d.lastSuccessfulRead,
+    errorMessage: d.lastError || undefined,
+    type: 'Modbus' as const, // For now, assume all are Modbus (can be enhanced later)
+  }))
 
   if (allDevices.length === 0) {
     return (

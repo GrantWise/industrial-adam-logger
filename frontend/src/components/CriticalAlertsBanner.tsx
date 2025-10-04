@@ -9,18 +9,18 @@ export function CriticalAlertsBanner() {
   const alerts: Array<{ type: 'error' | 'warning'; message: string }> = []
 
   // Database offline
-  if (health.database && !health.database.connected) {
+  if (health.components?.database && !health.components.database.connected) {
     alerts.push({
       type: 'error',
-      message: `Database offline: ${health.database.message || 'Cannot connect to TimescaleDB'}`,
+      message: `Database offline: Cannot connect to TimescaleDB`,
     })
   }
 
   // MQTT broker offline
-  if (health.mqtt && !health.mqtt.connected) {
+  if (health.components?.mqtt && !health.components.mqtt.connected) {
     alerts.push({
       type: 'warning',
-      message: `MQTT broker offline: ${health.mqtt.message || 'Cannot connect to broker'}`,
+      message: `MQTT broker offline: Cannot connect to broker`,
     })
   }
 
@@ -33,34 +33,31 @@ export function CriticalAlertsBanner() {
     })
   }
 
-  // Offline devices
-  const offlineModbus = health.modbusDevices?.filter((d) => d.status === 'Offline') || []
-  const offlineMqtt = health.mqttDevices?.filter((d) => d.status === 'Offline') || []
-  const offlineDevices = [...offlineModbus, ...offlineMqtt]
+  // Offline/Error devices from components.devices.details
+  if (health.components?.devices?.details) {
+    const deviceDetails = Object.values(health.components.devices.details)
+    const offlineDevices = deviceDetails.filter((d) => d.isOffline)
 
-  if (offlineDevices.length > 0) {
-    alerts.push({
-      type: 'warning',
-      message: `${offlineDevices.length} device(s) offline: ${offlineDevices
-        .slice(0, 3)
-        .map((d) => d.deviceId)
-        .join(', ')}${offlineDevices.length > 3 ? '...' : ''}`,
-    })
-  }
+    if (offlineDevices.length > 0) {
+      alerts.push({
+        type: 'warning',
+        message: `${offlineDevices.length} device(s) offline: ${offlineDevices
+          .slice(0, 3)
+          .map((d) => d.deviceId)
+          .join(', ')}${offlineDevices.length > 3 ? '...' : ''}`,
+      })
+    }
 
-  // Error devices
-  const errorModbus = health.modbusDevices?.filter((d) => d.status === 'Error') || []
-  const errorMqtt = health.mqttDevices?.filter((d) => d.status === 'Error') || []
-  const errorDevices = [...errorModbus, ...errorMqtt]
-
-  if (errorDevices.length > 0) {
-    alerts.push({
-      type: 'error',
-      message: `${errorDevices.length} device(s) in error state: ${errorDevices
-        .slice(0, 3)
-        .map((d) => d.deviceId)
-        .join(', ')}${errorDevices.length > 3 ? '...' : ''}`,
-    })
+    const errorDevices = deviceDetails.filter((d) => !d.isOffline && !d.isConnected && d.lastError)
+    if (errorDevices.length > 0) {
+      alerts.push({
+        type: 'error',
+        message: `${errorDevices.length} device(s) in error state: ${errorDevices
+          .slice(0, 3)
+          .map((d) => d.deviceId)
+          .join(', ')}${errorDevices.length > 3 ? '...' : ''}`,
+      })
+    }
   }
 
   if (alerts.length === 0) return null

@@ -256,8 +256,11 @@ app.MapGet("/health", (AdamLoggerService loggerService) =>
         : Results.Json(result, statusCode: 503);
 })
 .WithName("GetHealth")
-.WithSummary("Get service health status")
-.WithDescription("Returns overall health status of the ADAM Logger service including device connectivity. Returns 200 when healthy, 503 when unhealthy.")
+.WithSummary("Get basic service health status")
+.WithDescription("Returns basic health status including service uptime and device connectivity. " +
+                 "Does NOT include database or MQTT broker status. " +
+                 "Use /health/detailed for complete system health including database status. " +
+                 "Returns 200 when healthy, 503 when unhealthy.")
 .Produces<HealthResponse>(200)
 .Produces<HealthResponse>(503)
 .WithTags("Health")
@@ -304,8 +307,11 @@ app.MapGet("/health/detailed", async (AdamLoggerService loggerService, ITimescal
         : Results.Json(result, statusCode: 503);
 })
 .WithName("GetDetailedHealth")
-.WithSummary("Get detailed health status")
-.WithDescription("Returns comprehensive health check including service, database, and individual device status. Returns 200 when healthy, 503 when unhealthy.")
+.WithSummary("Get detailed health status (recommended for monitoring)")
+.WithDescription("Returns comprehensive health check including service, database, MQTT broker (if configured), and detailed device status. " +
+                 "Recommended for monitoring dashboards and health checks that need database status. " +
+                 "Response structure differs from /health - data is wrapped in 'components' object. " +
+                 "Returns 200 when healthy, 503 when unhealthy.")
 .Produces<DetailedHealthResponse>(200)
 .Produces<DetailedHealthResponse>(503)
 .WithTags("Health")
