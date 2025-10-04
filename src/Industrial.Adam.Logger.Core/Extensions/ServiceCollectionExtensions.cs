@@ -50,12 +50,10 @@ public static class ServiceCollectionExtensions
             return new TimescaleStorage(logger, settings);
         });
 
-        // Add main service
-        services.AddHostedService<AdamLoggerService>();
-        services.AddSingleton<AdamLoggerService>(provider =>
-            provider.GetServices<IHostedService>()
-                .OfType<AdamLoggerService>()
-                .First());
+        // Add main service (register as singleton, then use same instance for hosted service)
+        services.AddSingleton<AdamLoggerService>();
+        services.AddHostedService(provider =>
+            provider.GetRequiredService<AdamLoggerService>());
 
         return services;
     }
@@ -140,12 +138,10 @@ public static class ServiceCollectionExtensions
             return new TimescaleStorage(logger, settings);
         });
 
-        // Add main service
-        services.AddHostedService<AdamLoggerService>();
-        services.AddSingleton<AdamLoggerService>(provider =>
-            provider.GetServices<IHostedService>()
-                .OfType<AdamLoggerService>()
-                .First());
+        // Add main service (register as singleton, then use same instance for hosted service)
+        services.AddSingleton<AdamLoggerService>();
+        services.AddHostedService(provider =>
+            provider.GetRequiredService<AdamLoggerService>());
 
         return services;
     }
