@@ -1,14 +1,12 @@
 using System.Collections.Concurrent;
-using System.Text;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.OpenApi;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Industrial.Adam.Logger.Core.Devices;
 using Industrial.Adam.Logger.Core.Extensions;
 using Industrial.Adam.Logger.Core.Models;
 using Industrial.Adam.Logger.Core.Services;
 using Industrial.Adam.Logger.Core.Storage;
+using Industrial.Adam.Logger.WebApi.Authentication;
 using Industrial.Adam.Logger.WebApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -29,13 +27,13 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
-    // JWT Authentication configuration
-    c.AddSecurityDefinition("Bearer", new()
+    // API Key Authentication configuration
+    c.AddSecurityDefinition("ApiKey", new()
     {
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
-        Scheme = "bearer",
-        BearerFormat = "JWT",
-        Description = "Enter JWT Bearer token to access protected endpoints"
+        Type = SecuritySchemeType.ApiKey,
+        In = ParameterLocation.Header,
+        Name = "X-API-Key",
+        Description = "Enter your API key to access protected endpoints"
     });
 
     c.AddSecurityRequirement(new()
@@ -45,8 +43,8 @@ builder.Services.AddSwaggerGen(c =>
             {
                 Reference = new()
                 {
-                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
-                    Id = "Bearer"
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "ApiKey"
                 }
             },
             Array.Empty<string>()
@@ -68,30 +66,13 @@ builder.Services.AddSwaggerGen(c =>
     }
 });
 
-// Add simple JWT authentication
-var jwtSettings = builder.Configuration.GetSection("Jwt");
-var secretKey = jwtSettings["SecretKey"] ?? throw new InvalidOperationException("JWT SecretKey is required");
-var key = Encoding.UTF8.GetBytes(secretKey);
+// Add API key validator
+builder.Services.AddSingleton<IApiKeyValidator, FileBasedApiKeyValidator>();
 
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
-{
-    options.TokenValidationParameters = new TokenValidationParameters
-    {
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = true,
-        ValidateIssuerSigningKey = true,
-        ValidIssuer = jwtSettings["Issuer"],
-        ValidAudience = jwtSettings["Audience"],
-        IssuerSigningKey = new SymmetricSecurityKey(key),
-        ClockSkew = TimeSpan.Zero
-    };
-});
+// Add authentication with API key support (primary) and JWT (future web UI)
+builder.Services.AddAuthentication(ApiKeyAuthenticationOptions.DefaultScheme)
+    .AddScheme<ApiKeyAuthenticationOptions, ApiKeyAuthenticationHandler>(
+        ApiKeyAuthenticationOptions.DefaultScheme, null);
 
 builder.Services.AddAuthorization();
 
@@ -124,6 +105,90 @@ builder.Services.AddHealthChecks()
     .AddCheck<DevicePoolHealthCheck>("device-pool");
 
 var app = builder.Build();
+
+// ============================================================================
+// STARTUP LOGGING AND VALIDATION
+// ============================================================================
+
+var logger = app.Services.GetRequiredService<ILogger<Program>>();
+
+// Log startup information
+logger.LogInformation(
+    "Industrial ADAM Logger starting | Environment: {Environment} | Version: {Version}",
+    app.Environment.EnvironmentName,
+    typeof(Program).Assembly.GetName().Version);
+
+// Validate and log API key configuration
+var apiKeysPath = builder.Configuration["ApiKeys:FilePath"] ?? "config/apikeys.json";
+if (!File.Exists(apiKeysPath))
+{
+    logger.LogWarning(
+        "API keys file not found at {Path}. Authentication will fail until file is created.",
+        apiKeysPath);
+}
+else
+{
+    logger.LogInformation("API Key authentication enabled | Keys file: {Path}", apiKeysPath);
+}
+
+// Validate and log CORS configuration
+var corsPolicy = app.Environment.IsDevelopment() ? "Development (Allow All)" : "Production";
+var allowedOrigins = app.Environment.IsDevelopment()
+    ? new[] { "*" }
+    : builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+
+logger.LogInformation(
+    "CORS Policy: {Policy} | Allowed Origins: {Origins}",
+    corsPolicy,
+    string.Join(", ", allowedOrigins));
+
+// Validate and log TimescaleDB configuration
+var dbHost = builder.Configuration["AdamLogger:TimescaleDb:Host"];
+var dbPort = builder.Configuration.GetValue<int>("AdamLogger:TimescaleDb:Port");
+var dbDatabase = builder.Configuration["AdamLogger:TimescaleDb:Database"];
+var dbTable = builder.Configuration["AdamLogger:TimescaleDb:TableName"];
+
+if (string.IsNullOrWhiteSpace(dbHost))
+{
+    logger.LogCritical("TimescaleDB host not configured. Set 'AdamLogger:TimescaleDb:Host' in appsettings.json");
+    throw new InvalidOperationException(
+        "TimescaleDB host not configured. Set 'AdamLogger:TimescaleDb:Host' in appsettings.json");
+}
+
+if (string.IsNullOrWhiteSpace(dbDatabase))
+{
+    logger.LogCritical("TimescaleDB database not configured. Set 'AdamLogger:TimescaleDb:Database' in appsettings.json");
+    throw new InvalidOperationException(
+        "TimescaleDB database not configured. Set 'AdamLogger:TimescaleDb:Database' in appsettings.json");
+}
+
+logger.LogInformation(
+    "TimescaleDB configured | Host: {Host}:{Port} | Database: {Database} | Table: {Table}",
+    dbHost, dbPort, dbDatabase, dbTable);
+
+// Test database connection at startup (non-blocking)
+try
+{
+    var timescaleStorage = app.Services.GetRequiredService<ITimescaleStorage>();
+    var dbHealthy = await timescaleStorage.TestConnectionAsync();
+
+    if (!dbHealthy)
+    {
+        logger.LogWarning(
+            "TimescaleDB connection test failed at startup. Service will start but data storage may fail. " +
+            "Check database connectivity.");
+    }
+    else
+    {
+        logger.LogInformation("TimescaleDB connection test successful");
+    }
+}
+catch (Exception ex)
+{
+    logger.LogWarning(ex, "Could not test TimescaleDB connection at startup. Service will continue but database may be unavailable.");
+}
+
+logger.LogInformation("Startup validation complete. Service is ready.");
 
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
@@ -165,9 +230,11 @@ if (devicePool != null)
 app.MapGet("/health", (AdamLoggerService loggerService) =>
 {
     var status = loggerService.GetStatus();
+    var isHealthy = status.IsRunning;
+
     var result = new HealthResponse
     {
-        Status = status.IsRunning ? "Healthy" : "Unhealthy",
+        Status = isHealthy ? "Healthy" : "Unhealthy",
         Timestamp = DateTimeOffset.UtcNow,
         Service = new ServiceInfo
         {
@@ -183,24 +250,28 @@ app.MapGet("/health", (AdamLoggerService loggerService) =>
         }
     };
 
-    return Results.Ok(result);
+    // Return 503 Service Unavailable when unhealthy (load balancers check HTTP status code)
+    return isHealthy
+        ? Results.Ok(result)
+        : Results.Json(result, statusCode: 503);
 })
 .WithName("GetHealth")
 .WithSummary("Get service health status")
-.WithDescription("Returns overall health status of the ADAM Logger service including device connectivity")
+.WithDescription("Returns overall health status of the ADAM Logger service including device connectivity. Returns 200 when healthy, 503 when unhealthy.")
 .Produces<HealthResponse>(200)
-.Produces(401)
+.Produces<HealthResponse>(503)
 .WithTags("Health")
-.RequireAuthorization();
+.AllowAnonymous();
 
 app.MapGet("/health/detailed", async (AdamLoggerService loggerService, ITimescaleStorage timescaleStorage) =>
 {
     var status = loggerService.GetStatus();
     var timescaleHealthy = await timescaleStorage.TestConnectionAsync();
+    var isHealthy = status.IsRunning && timescaleHealthy;
 
     var result = new DetailedHealthResponse
     {
-        Status = status.IsRunning && timescaleHealthy ? "Healthy" : "Unhealthy",
+        Status = isHealthy ? "Healthy" : "Unhealthy",
         Timestamp = DateTimeOffset.UtcNow,
         Components = new ComponentsHealth
         {
@@ -227,15 +298,18 @@ app.MapGet("/health/detailed", async (AdamLoggerService loggerService, ITimescal
         }
     };
 
-    return Results.Ok(result);
+    // Return 503 Service Unavailable when unhealthy (load balancers check HTTP status code)
+    return isHealthy
+        ? Results.Ok(result)
+        : Results.Json(result, statusCode: 503);
 })
 .WithName("GetDetailedHealth")
 .WithSummary("Get detailed health status")
-.WithDescription("Returns comprehensive health check including service, database, and individual device status")
+.WithDescription("Returns comprehensive health check including service, database, and individual device status. Returns 200 when healthy, 503 when unhealthy.")
 .Produces<DetailedHealthResponse>(200)
-.Produces(401)
+.Produces<DetailedHealthResponse>(503)
 .WithTags("Health")
-.RequireAuthorization();
+.AllowAnonymous();
 
 // ============================================================================
 // DEVICE ENDPOINTS  
@@ -273,23 +347,41 @@ app.MapGet("/devices/{deviceId}", (string deviceId, AdamLoggerService loggerServ
 .WithTags("Devices")
 .RequireAuthorization();
 
-app.MapPost("/devices/{deviceId}/restart", async (string deviceId, AdamLoggerService loggerService) =>
+app.MapPost("/devices/{deviceId}/restart", async (string deviceId, AdamLoggerService loggerService, ILogger<Program> logger) =>
 {
     try
     {
         var result = await loggerService.RestartDeviceAsync(deviceId);
         if (result)
         {
+            logger.LogInformation("Device {DeviceId} restarted successfully", deviceId);
             return Results.Ok(new ApiResponse { Message = $"Device '{deviceId}' restarted successfully" });
         }
 
-        return Results.NotFound(new ErrorResponse { Error = $"Device '{deviceId}' not found" });
+        return Results.NotFound(new ErrorResponse { Error = $"Device '{deviceId}' not found. Check /devices endpoint for available devices." });
+    }
+    catch (ObjectDisposedException)
+    {
+        logger.LogWarning("Attempted to restart device {DeviceId} during shutdown", deviceId);
+        return Results.Problem(
+            detail: $"Service is shutting down. Wait for service to fully restart before managing devices.",
+            title: "Service Unavailable",
+            statusCode: 503);
+    }
+    catch (InvalidOperationException ex)
+    {
+        logger.LogError(ex, "Invalid operation while restarting device {DeviceId}", deviceId);
+        return Results.Problem(
+            detail: $"Device restart operation failed: {ex.Message}",
+            title: "Operation Failed",
+            statusCode: 500);
     }
     catch (Exception ex)
     {
+        logger.LogError(ex, "Unexpected error restarting device {DeviceId}", deviceId);
         return Results.Problem(
-            detail: ex.Message,
-            title: "Device restart failed",
+            detail: "Device restart failed due to internal error. Check logs for details.",
+            title: "Internal Error",
             statusCode: 500);
     }
 })
@@ -448,12 +540,9 @@ app.MapDelete("/data/cache", () =>
 .WithTags("Utilities")
 .RequireAuthorization();
 
-// Add built-in health checks endpoint
+// Add built-in health checks endpoint (returns 200/Healthy, 503/Unhealthy, or 429/Degraded)
 app.MapHealthChecks("/health/checks")
-    .WithName("GetHealthChecks")
-    .WithSummary("ASP.NET Core health checks")
-    .WithDescription("Built-in health check endpoint for monitoring TimescaleDB connectivity and device pool status")
-    .WithTags("Health");
+    .AllowAnonymous();
 
 app.Run();
 

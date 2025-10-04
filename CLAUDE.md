@@ -30,7 +30,214 @@ Before making a change, ask yourself:
 2.  Would I want to maintain this code in six months?
 3.  Can a new team member grasp this quickly?
 
-## 2. Architectural & Development Standards
+## 2. Industrial-Grade Quality Standard: The Toyota/Lexus Principle
+
+This codebase follows the **Toyota/Lexus principle**: Simple, robust, and dependable like a car that runs for 300,000 miles without major issues. We aim for industrial-grade quality that is sophisticated where needed but never over-engineered.
+
+### The Six Pillars of Industrial-Grade Code
+
+Every component in this system must meet these standards:
+
+#### 1. **Not Over-Engineered** - Simplicity First (KISS Principle)
+- Use the simplest solution that solves the problem completely
+- File-based storage instead of database when appropriate (e.g., API key configuration)
+- No unnecessary abstractions or patterns
+- Prefer proven, boring technology over clever solutions
+- **Anti-pattern**: Adding a database, message queue, or service mesh when a file or simple class will do
+
+**Example**: API key authentication uses file-based storage, not a database. Simple, works offline, easy to manage.
+
+#### 2. **Sophisticated Where Needed** - Engineering for Reliability
+- Add sophistication only where industrial reliability demands it
+- Hot-reload capabilities for zero-downtime operations
+- Thread-safe concurrency (SemaphoreSlim, Interlocked, volatile fields)
+- Constant-time comparisons for security-critical operations
+- Retry policies with exponential backoff + jitter
+- Dead letter queues for zero data loss
+
+**When to add sophistication**:
+- 24/7 operation requirements → hot-reload, auto-reconnect
+- Security requirements → constant-time comparison, input validation
+- Data integrity requirements → dead letter queue, quality indicators
+- Performance requirements → batching, Channels, connection pooling
+
+**Example**: FileSystemWatcher + debounce timer for hot-reload (sophisticated) but still file-based storage (simple).
+
+#### 3. **Robust Error Handling** - Fail-Fast with Actionable Messages
+- Catch specific exception types (UnauthorizedAccessException, IOException, JsonException)
+- Provide actionable error messages that tell operators exactly what to do
+- Fail-fast on invalid configuration (don't silently continue with empty data)
+- Use structured logging with context (who, what, when, where, why)
+- Validate all inputs at boundaries
+
+**Bad Error Message**:
+```csharp
+throw new Exception("Failed to load configuration");
+```
+
+**Good Error Message**:
+```csharp
+throw new InvalidOperationException(
+    $"Cannot read API keys file due to permissions: {filePath}. " +
+    $"Ensure file has correct permissions (600 on Unix, restricted ACL on Windows).", ex);
+```
+
+**Example Pattern** (from TimescaleStorage.ValidateTableName):
+```csharp
+if (tableName.Length > 63)
+{
+    throw new ArgumentException(
+        $"Table name '{tableName}' exceeds PostgreSQL maximum length of 63 characters",
+        nameof(tableName));
+}
+```
+
+#### 4. **Zero Downtime Operations** - Toyota Doesn't Stop for Oil Changes
+- Configuration changes must not require service restarts
+- Hot-reload for credentials, settings, subscriptions
+- Graceful degradation when dependencies fail
+- Auto-reconnect with backoff for external connections
+- Health checks that don't block normal operations
+
+**Critical Question**: Can this be changed while the system is running?
+- API keys → YES (hot-reload with FileSystemWatcher)
+- MQTT topics → YES (dynamic subscription management)
+- Database connection → NO (acceptable - rare change, requires restart)
+
+**Example**: MQTT reconnect logic allows broker restarts without stopping the logger service.
+
+#### 5. **Complete Observability** - Rich Structured Logging
+- Log with structured context: who (key ID), what (action), when (timestamp), where (IP/path), why (reason)
+- Success AND failure logging for complete audit trail
+- Performance metrics (latency, throughput, queue sizes)
+- Health status endpoints with detailed diagnostics
+- Integration with SIEM systems (structured JSON logs)
+
+**Logging Standard**:
+```csharp
+// Success
+Logger.LogInformation(
+    "API key authenticated: {KeyName} ({KeyId}) from {IpAddress} for {RequestPath} {RequestMethod} at {Timestamp}",
+    keyInfo.Name, keyInfo.Id, ipAddress, path, method, timestamp);
+
+// Failure
+Logger.LogWarning(
+    "Authentication failed: {Reason} | Key: {KeyPrefix}*** | IP: {IpAddress} | Path: {RequestPath}",
+    reason, keyPrefix, ipAddress, path);
+```
+
+#### 6. **Follows Proven Patterns** - Consistency Across Codebase
+- Use the same patterns as existing code (ModbusDeviceConnection, TimescaleStorage, DeadLetterQueue)
+- SemaphoreSlim for critical sections
+- IAsyncDisposable with graceful shutdown
+- ConfigureAwait(false) consistently
+- Interlocked for thread-safe counters
+- Polly for retry policies
+- Channel for high-throughput async processing
+
+**Pattern Reference Guide**:
+
+| Need | Pattern Source | Pattern to Use |
+|------|---------------|----------------|
+| Critical section locking | ModbusDeviceConnection | `SemaphoreSlim` |
+| Thread-safe flags | ModbusDevicePool | `volatile` fields + `Interlocked` |
+| Input validation | TimescaleStorage.ValidateTableName | Specific validation methods |
+| Retry logic | TimescaleStorage | Polly with exponential backoff + jitter |
+| Hot-reload | DeadLetterQueue | Timer or FileSystemWatcher |
+| High-throughput async | TimescaleStorage | `System.Threading.Channels` |
+| Graceful shutdown | All Core classes | `IAsyncDisposable` |
+
+### The Toyota Test
+
+Before merging any code, apply the Toyota Test:
+
+**Question**: If this code controlled the brakes in a Toyota, would it pass review?
+
+**Pass Criteria**:
+- ✅ Simple enough to understand and maintain
+- ✅ Sophisticated enough to be reliable
+- ✅ Fails fast with clear error messages
+- ✅ Can be serviced without taking the car off the road
+- ✅ Logs everything for diagnostics
+- ✅ Follows the same patterns as other Toyota systems
+
+**Examples**:
+
+| Feature | Toyota Test | Reasoning |
+|---------|-------------|-----------|
+| API key authentication (before fixes) | ❌ FAIL | Required restart to rotate keys |
+| API key authentication (after fixes) | ✅ PASS | Hot-reload, constant-time comparison, clear errors |
+| Dead Letter Queue | ✅ PASS | Zero data loss, auto-retry, observable |
+| Modbus polling | ✅ PASS | Auto-reconnect, retry policy, thread-safe |
+| MQTT auto-reconnect | ✅ PASS | Handles broker restarts, exponential backoff |
+
+### Code Review Checklist
+
+Use this checklist for all pull requests:
+
+**Simplicity** (Pillar 1):
+- [ ] Is this the simplest solution that solves the problem completely?
+- [ ] Have I avoided unnecessary abstractions, patterns, or dependencies?
+- [ ] Would a junior developer understand this code in 6 months?
+
+**Sophistication** (Pillar 2):
+- [ ] Have I added thread-safety where needed (locks, volatile, Interlocked)?
+- [ ] Does this handle concurrent operations correctly?
+- [ ] Is security handled properly (constant-time comparison, input validation)?
+- [ ] Will this work reliably in production for months without intervention?
+
+**Error Handling** (Pillar 3):
+- [ ] Do error messages tell the operator exactly what went wrong and how to fix it?
+- [ ] Are specific exception types caught (not generic `Exception`)?
+- [ ] Does the code fail-fast on invalid configuration?
+- [ ] Is all context logged (who, what, when, where, why)?
+
+**Zero Downtime** (Pillar 4):
+- [ ] Can configuration be changed without restart (where appropriate)?
+- [ ] Does the code handle dependency failures gracefully?
+- [ ] Is there auto-reconnect logic for external connections?
+- [ ] Will this maintain 24/7 operation?
+
+**Observability** (Pillar 5):
+- [ ] Are success and failure cases logged with full context?
+- [ ] Can operators diagnose issues from logs alone?
+- [ ] Are metrics exposed (latency, throughput, queue sizes)?
+- [ ] Is logging structured (not just strings)?
+
+**Consistency** (Pillar 6):
+- [ ] Does this follow the same patterns as existing code?
+- [ ] Have I reused existing patterns instead of inventing new ones?
+- [ ] Is `ConfigureAwait(false)` used consistently?
+- [ ] Does disposal follow `IAsyncDisposable` pattern?
+
+**Final Question**:
+- [ ] **Would this pass the Toyota Test?**
+
+### When to Violate These Principles
+
+These are principles, not rules. Violate them when you have a good reason, but document why.
+
+**Valid Reasons**:
+- Performance bottleneck proven by benchmarks
+- External system constraints (third-party API limitations)
+- Regulatory requirements (specific compliance needs)
+- Temporary technical debt (clearly marked with TODO and issue number)
+
+**Invalid Reasons**:
+- "This is how I always do it"
+- "This is more elegant"
+- "I read about this pattern in a blog post"
+- "Other frameworks do it this way"
+
+**If you violate a principle, add a comment**:
+```csharp
+// PRINCIPLE VIOLATION: Using Task.Run here instead of ConfigureAwait(false)
+// Reason: NModbus library blocks async calls, need to offload to thread pool
+// TODO(#123): Replace with true async when NModbus v5 released
+var result = await Task.Run(() => _modbusMaster.ReadRegisters(...), token);
+```
+
+## 3. Architectural & Development Standards
 
 Refer to the official documentation for detailed standards. Your work must adhere to these principles.
 
@@ -39,7 +246,7 @@ Refer to the official documentation for detailed standards. Your work must adher
 - **Technical Stack**: See `docs/technical_specification.md` for the list of approved technologies.
 - **Git Workflow**: See `GITHUB-WORKFLOW.md` for the definitive GitHub workflow, branching strategy, and commit conventions.
 
-## 3. Debugging & Test Fixing Process
+## 4. Debugging & Test Fixing Process
 
 When fixing failing tests or debugging bugs, you **MUST** follow this process:
 
@@ -57,7 +264,7 @@ When fixing failing tests or debugging bugs, you **MUST** follow this process:
 - Hardcoding values that should come from configuration.
 - Implementing inconsistent error handling.
 
-## 4. Code Quality Quick Reference
+## 5. Code Quality Quick Reference
 
 - **Function Size**: Aim for 20-40 lines, but prioritize readability. A 60-line function with a clear, single purpose is acceptable.
 - **Class/Component Size**: Aim for ~200 lines, but prioritize logical cohesion. Do not fragment tightly coupled logic just to meet a size guideline.
@@ -65,7 +272,7 @@ When fixing failing tests or debugging bugs, you **MUST** follow this process:
 - **Error Handling**: Use specific exception types and structured logging. Return meaningful error messages.
 - **Testing**: Follow the Arrange, Act, Assert pattern. Ensure tests are independent and have descriptive names.
 
-## 5. Data Integrity and 21 CFR Part 11 Compliance
+## 6. Data Integrity and 21 CFR Part 11 Compliance
 
 **CRITICAL REQUIREMENT**: Industrial systems must maintain absolute data integrity and transparency.
 
@@ -118,7 +325,7 @@ return {
 
 This principle applies to ALL industrial data: device readings, OEE calculations, system metrics, and dashboard displays.
 
-## 6. Common Commands
+## 7. Common Commands
 
 ### Build & Test
 ```bash
@@ -213,7 +420,7 @@ curl http://localhost:5000/mqtt/health
 dotnet run --project src/Industrial.Adam.Logger.Benchmarks -c Release
 ```
 
-## 7. Architecture
+## 8. Architecture
 
 ### Clean Architecture Layers
 
@@ -289,7 +496,7 @@ All configuration in `appsettings.json`:
 
 **See `docs/mqtt-guide.md` for complete MQTT setup and configuration details.**
 
-## 8. Testing Approach
+## 9. Testing Approach
 
 ### Test Organization
 
@@ -330,7 +537,7 @@ public void DataProcessor_Should_DetectOverflow()
 }
 ```
 
-## 9. Technology Stack
+## 10. Technology Stack
 
 - **.NET 9** with C# 13
 - **TimescaleDB** (PostgreSQL + time-series)
@@ -351,7 +558,7 @@ public void DataProcessor_Should_DetectOverflow()
 - Deterministic builds for CI/CD
 - Source Link enabled for debugging
 
-## 10. API Endpoints
+## 11. API Endpoints
 
 Base URL: `http://localhost:5000`
 
@@ -376,7 +583,7 @@ Base URL: `http://localhost:5000`
 
 Swagger UI: `http://localhost:5000/swagger`
 
-## 11. Hardware Configuration
+## 12. Hardware Configuration
 
 ### ADAM-6000 Series Devices
 
@@ -475,7 +682,7 @@ Simulators mimic ADAM-6051 behavior for testing:
 - Configurable via command-line arguments
 - **Note**: Simulators currently only support digital counters (ADAM-6051)
 
-## 12. Deployment
+## 13. Deployment
 
 ### Production Checklist
 
@@ -497,7 +704,7 @@ Use `docker/.env.template` as starting point:
 - `JWT_ISSUER`, `JWT_AUDIENCE` - JWT claims
 - `CORS_ALLOWED_ORIGINS` - Comma-separated allowed origins
 
-## 13. Project Structure
+## 14. Project Structure
 
 ```
 industrial-adam-logger/
@@ -526,7 +733,7 @@ industrial-adam-logger/
 └── CLAUDE.md                                 # This file
 ```
 
-## 14. Migration Context
+## 15. Migration Context
 
 This repository was extracted from a larger multi-module platform (`adam-6000-counter`) and is now a focused, single-purpose logger service. See `MIGRATION-SUMMARY.md` for details.
 
