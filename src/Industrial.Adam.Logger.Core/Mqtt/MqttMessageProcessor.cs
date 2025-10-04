@@ -62,11 +62,11 @@ public sealed class MqttMessageProcessor
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
 
-        // Extract channel number
+        // Extract channel number (default to 0 for single-value MQTT devices)
         if (!TryExtractJsonValue<int>(root, config.ChannelJsonPath ?? "$.channel", out var channelNumber))
         {
-            _logger.LogWarning("Could not extract channel number from JSON using path {Path}", config.ChannelJsonPath);
-            return null;
+            channelNumber = 0;
+            _logger.LogDebug("No channel in payload for device {DeviceId}, defaulting to channel 0", config.DeviceId);
         }
 
         // Extract value
@@ -97,27 +97,45 @@ public sealed class MqttMessageProcessor
     {
         _logger.LogDebug("Processing binary payload ({Length} bytes)", payload.Count);
 
-        if (payload.Count < 4)
-        {
-            _logger.LogWarning("Binary payload too small: {Length} bytes (minimum 4)", payload.Count);
-            return null;
-        }
-
         try
         {
             var span = payload.AsSpan();
+            int channelNumber = 0;
+            int valueOffset = 0;
 
-            // Extract channel number (first byte)
-            var channelNumber = span[0];
+            // Check if payload includes channel byte (old format: [channel][value])
+            // or just value (new format: [value] with channel defaulting to 0)
+            var expectedSizeWithChannel = GetExpectedBinarySize(config.DataType, includeChannelByte: true);
+            var expectedSizeNoChannel = GetExpectedBinarySize(config.DataType, includeChannelByte: false);
+
+            if (payload.Count == expectedSizeWithChannel)
+            {
+                // Format: [1 byte channel][N bytes value]
+                channelNumber = span[0];
+                valueOffset = 1;
+            }
+            else if (payload.Count == expectedSizeNoChannel)
+            {
+                // Format: [N bytes value] - channel defaults to 0
+                channelNumber = 0;
+                valueOffset = 0;
+                _logger.LogDebug("Binary payload has no channel byte, defaulting to channel 0 for device {DeviceId}", config.DeviceId);
+            }
+            else
+            {
+                _logger.LogWarning("Binary payload has unexpected length: {Length} bytes (expected {WithChannel} or {NoChannel})",
+                    payload.Count, expectedSizeWithChannel, expectedSizeNoChannel);
+                return null;
+            }
 
             // Extract value based on data type
             double value = config.DataType switch
             {
-                MqttDataType.UInt32 => BitConverter.ToUInt32(span[1..5]),
-                MqttDataType.Int16 => BitConverter.ToInt16(span[1..3]),
-                MqttDataType.UInt16 => BitConverter.ToUInt16(span[1..3]),
-                MqttDataType.Float32 => BitConverter.ToSingle(span[1..5]),
-                MqttDataType.Float64 => BitConverter.ToDouble(span[1..9]),
+                MqttDataType.UInt32 => BitConverter.ToUInt32(span.Slice(valueOffset, 4)),
+                MqttDataType.Int16 => BitConverter.ToInt16(span.Slice(valueOffset, 2)),
+                MqttDataType.UInt16 => BitConverter.ToUInt16(span.Slice(valueOffset, 2)),
+                MqttDataType.Float32 => BitConverter.ToSingle(span.Slice(valueOffset, 4)),
+                MqttDataType.Float64 => BitConverter.ToDouble(span.Slice(valueOffset, 8)),
                 _ => throw new NotSupportedException($"Data type {config.DataType} not supported for binary format")
             };
 
@@ -133,39 +151,79 @@ public sealed class MqttMessageProcessor
         }
     }
 
+    private static int GetExpectedBinarySize(MqttDataType dataType, bool includeChannelByte)
+    {
+        var channelSize = includeChannelByte ? 1 : 0;
+        var valueSize = dataType switch
+        {
+            MqttDataType.Int16 => 2,
+            MqttDataType.UInt16 => 2,
+            MqttDataType.UInt32 => 4,
+            MqttDataType.Float32 => 4,
+            MqttDataType.Float64 => 8,
+            _ => throw new NotSupportedException($"Data type {dataType} not supported")
+        };
+        return channelSize + valueSize;
+    }
+
     private DeviceReading? ProcessCsvPayload(MqttDeviceConfig config, string topic, ArraySegment<byte> payload)
     {
         var csv = Encoding.UTF8.GetString(payload).Trim();
         _logger.LogDebug("Processing CSV payload: {Csv}", csv);
 
         var fields = csv.Split(',');
-        if (fields.Length < 2)
+        if (fields.Length < 1)
         {
-            _logger.LogWarning("CSV payload has insufficient fields: {Count}", fields.Length);
+            _logger.LogWarning("CSV payload is empty");
             return null;
         }
 
         try
         {
-            // First field is channel number, second is value
-            if (!int.TryParse(fields[0], out var channelNumber))
-            {
-                _logger.LogWarning("Could not parse channel number from CSV: {Field}", fields[0]);
-                return null;
-            }
+            int channelNumber = 0;
+            double value;
+            int timestampFieldIndex;
 
-            if (!double.TryParse(fields[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+            // Support two CSV formats:
+            // 1. Single value: "123.45" or "123.45,2025-10-04T10:00:00Z"
+            // 2. Channel,value: "0,123.45" or "0,123.45,2025-10-04T10:00:00Z"
+
+            if (fields.Length == 1 || !int.TryParse(fields[0], out channelNumber))
             {
-                _logger.LogWarning("Could not parse value from CSV: {Field}", fields[1]);
-                return null;
+                // Format 1: Just value (no channel) - defaults to channel 0
+                channelNumber = 0;
+                if (!double.TryParse(fields[0], NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+                {
+                    _logger.LogWarning("Could not parse value from CSV: {Field}", fields[0]);
+                    return null;
+                }
+                timestampFieldIndex = 1;
+                _logger.LogDebug("CSV has no channel field, defaulting to channel 0 for device {DeviceId}", config.DeviceId);
+            }
+            else
+            {
+                // Format 2: Channel,value
+                if (fields.Length < 2)
+                {
+                    _logger.LogWarning("CSV with channel number requires value field");
+                    return null;
+                }
+
+                if (!double.TryParse(fields[1], NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+                {
+                    _logger.LogWarning("Could not parse value from CSV: {Field}", fields[1]);
+                    return null;
+                }
+                timestampFieldIndex = 2;
             }
 
             // Apply scale factor
             var scaledValue = value * config.ScaleFactor;
 
-            // Optional timestamp in third field
+            // Optional timestamp field
             var timestamp = DateTimeOffset.UtcNow;
-            if (fields.Length > 2 && DateTimeOffset.TryParse(fields[2], CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsedTimestamp))
+            if (fields.Length > timestampFieldIndex &&
+                DateTimeOffset.TryParse(fields[timestampFieldIndex], CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsedTimestamp))
             {
                 timestamp = parsedTimestamp.ToUniversalTime();
             }
