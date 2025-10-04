@@ -1,12 +1,15 @@
+import { useState } from 'react'
 import { useHealthDetailed, useLatestData } from '@/api/hooks'
 import { StatusIndicator } from './StatusIndicator'
+import { DeviceTroubleshootingPanel } from './DeviceTroubleshootingPanel'
 import type { DeviceReading } from '@/api/types'
 import { formatDistanceToNow } from 'date-fns'
-import { Router, Wifi } from 'lucide-react'
+import { Router, Wifi, ChevronRight, ChevronDown } from 'lucide-react'
 
 export function DeviceTable() {
   const { data: health } = useHealthDetailed(10000) // 10s refresh
   const { data: latestData } = useLatestData(10000) // 10s refresh
+  const [expandedDevice, setExpandedDevice] = useState<string | null>(null)
 
   if (!health) {
     return (
@@ -44,6 +47,7 @@ export function DeviceTable() {
       <table className="w-full">
         <thead className="bg-gray-50 border-b border-gray-200">
           <tr>
+            <th className="px-4 py-3 w-8"></th>
             <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
               Type
             </th>
@@ -67,13 +71,26 @@ export function DeviceTable() {
         <tbody className="divide-y divide-gray-100">
           {allDevices.map((device) => {
             const latestReading = getLatestReading(device.deviceId)
+            const isExpanded = expandedDevice === device.deviceId
+
             return (
-              <tr
-                key={device.deviceId}
-                className="hover:bg-gray-50 transition-colors cursor-pointer"
-              >
-                {/* Type */}
-                <td className="px-4 py-3 whitespace-nowrap">
+              <>
+                <tr
+                  key={device.deviceId}
+                  onClick={() => setExpandedDevice(isExpanded ? null : device.deviceId)}
+                  className="hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  {/* Expand Icon */}
+                  <td className="px-4 py-3 whitespace-nowrap w-8">
+                    {isExpanded ? (
+                      <ChevronDown className="w-4 h-4 text-gray-400" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4 text-gray-400" />
+                    )}
+                  </td>
+
+                  {/* Type */}
+                  <td className="px-4 py-3 whitespace-nowrap">
                   <div className="flex items-center gap-2">
                     {device.type === 'Modbus' ? (
                       <Router className="w-4 h-4 text-blue-600" />
@@ -126,6 +143,16 @@ export function DeviceTable() {
                   )}
                 </td>
               </tr>
+
+              {/* Expanded Troubleshooting Panel */}
+              {isExpanded && (
+                <tr key={`${device.deviceId}-panel`}>
+                  <td colSpan={7} className="bg-gray-50 p-0">
+                    <DeviceTroubleshootingPanel deviceId={device.deviceId} />
+                  </td>
+                </tr>
+              )}
+            </>
             )
           })}
         </tbody>

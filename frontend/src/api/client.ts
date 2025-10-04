@@ -2,7 +2,7 @@ import axios from 'axios'
 import type {
   HealthResponse,
   HealthDetailedResponse,
-  Device,
+  DeviceHealth,
   DeviceReading,
   DataStatsResponse,
 } from './types'
