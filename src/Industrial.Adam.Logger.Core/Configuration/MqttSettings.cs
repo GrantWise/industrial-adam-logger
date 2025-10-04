@@ -82,6 +82,9 @@ public class MqttSettings
         if (string.IsNullOrWhiteSpace(BrokerHost))
             errors.Add("MQTT broker host is required");
 
+        if (QualityOfServiceLevel < 0 || QualityOfServiceLevel > 2)
+            errors.Add("QoS must be 0, 1, or 2");
+
         if (UseTls && BrokerPort == 1883)
             errors.Add("TLS enabled but using default non-TLS port 1883. Consider port 8883.");
 

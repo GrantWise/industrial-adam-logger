@@ -78,7 +78,7 @@ public sealed class TopicSubscriptionManager
     /// <returns>Device configuration if matched, null otherwise.</returns>
     public MqttDeviceConfig? FindDeviceForTopic(string topic)
     {
-        ArgumentNullException.ThrowIfNull(topic);
+        ArgumentException.ThrowIfNullOrEmpty(topic);
 
         // Try exact match first (O(1))
         if (_exactTopicLookup.TryGetValue(topic, out var device))

@@ -6,18 +6,13 @@ using Xunit;
 
 namespace Industrial.Adam.Logger.Core.Tests.Mqtt;
 
-public class TopicSubscriptionManagerTests : IDisposable
+public class TopicSubscriptionManagerTests
 {
     private readonly TopicSubscriptionManager _manager;
 
     public TopicSubscriptionManagerTests()
     {
         _manager = new TopicSubscriptionManager(NullLogger<TopicSubscriptionManager>.Instance);
-    }
-
-    public void Dispose()
-    {
-        _manager.Dispose();
     }
 
     [Fact]

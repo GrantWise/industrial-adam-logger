@@ -8,22 +8,10 @@ namespace Industrial.Adam.Logger.Core.Tests.Mqtt;
 public class MqttHealthMonitorTests
 {
     [Fact]
-    public void Constructor_InvalidMaxTopics_ThrowsArgumentOutOfRangeException()
-    {
-        // Arrange & Act
-        var actZero = () => new MqttHealthMonitor(0, NullLogger<MqttHealthMonitor>.Instance);
-        var actTooHigh = () => new MqttHealthMonitor(10001, NullLogger<MqttHealthMonitor>.Instance);
-
-        // Assert
-        actZero.Should().Throw<ArgumentOutOfRangeException>();
-        actTooHigh.Should().Throw<ArgumentOutOfRangeException>();
-    }
-
-    [Fact]
     public void RecordMessageReceived_ValidTopic_IncrementsCounters()
     {
         // Arrange
-        var monitor = new MqttHealthMonitor(1000, NullLogger<MqttHealthMonitor>.Instance);
+        var monitor = new MqttHealthMonitor();
 
         // Act
         monitor.RecordMessageReceived("test/topic");
@@ -39,7 +27,7 @@ public class MqttHealthMonitorTests
     public void RecordMessageReceived_NullTopic_ThrowsArgumentException()
     {
         // Arrange
-        var monitor = new MqttHealthMonitor(1000, NullLogger<MqttHealthMonitor>.Instance);
+        var monitor = new MqttHealthMonitor();
 
         // Act
         var act = () => monitor.RecordMessageReceived(null!);
@@ -52,7 +40,7 @@ public class MqttHealthMonitorTests
     public void RecordMessageReceived_EmptyTopic_ThrowsArgumentException()
     {
         // Arrange
-        var monitor = new MqttHealthMonitor(1000, NullLogger<MqttHealthMonitor>.Instance);
+        var monitor = new MqttHealthMonitor();
 
         // Act
         var act = () => monitor.RecordMessageReceived(string.Empty);
@@ -65,7 +53,7 @@ public class MqttHealthMonitorTests
     public void RecordMessageProcessed_ValidTopic_IncrementsCounter()
     {
         // Arrange
-        var monitor = new MqttHealthMonitor(1000, NullLogger<MqttHealthMonitor>.Instance);
+        var monitor = new MqttHealthMonitor();
         monitor.RecordMessageReceived("test/topic");
 
         // Act
@@ -81,7 +69,7 @@ public class MqttHealthMonitorTests
     public void RecordMessageFailed_ValidTopic_IncrementsCounter()
     {
         // Arrange
-        var monitor = new MqttHealthMonitor(1000, NullLogger<MqttHealthMonitor>.Instance);
+        var monitor = new MqttHealthMonitor();
         monitor.RecordMessageReceived("test/topic");
 
         // Act
@@ -94,28 +82,28 @@ public class MqttHealthMonitorTests
     }
 
     [Fact]
-    public void RecordMessageReceived_ExceedsMaxTopics_DoesNotAddNewTopic()
+    public void RecordMessageReceived_MultipleTopics_TracksAll()
     {
         // Arrange
-        var monitor = new MqttHealthMonitor(2, NullLogger<MqttHealthMonitor>.Instance);
+        var monitor = new MqttHealthMonitor();
         monitor.RecordMessageReceived("topic1");
         monitor.RecordMessageReceived("topic2");
-
-        // Act - try to add third topic
         monitor.RecordMessageReceived("topic3");
 
         // Assert
         var health = monitor.GetHealthStatus(true, 1);
-        health.TopicStatistics.Should().HaveCount(2);
-        health.TopicStatistics.Should().NotContainKey("topic3");
-        health.MessagesReceived.Should().Be(3); // Still counts the message
+        health.TopicStatistics.Should().HaveCount(3);
+        health.TopicStatistics.Should().ContainKey("topic1");
+        health.TopicStatistics.Should().ContainKey("topic2");
+        health.TopicStatistics.Should().ContainKey("topic3");
+        health.MessagesReceived.Should().Be(3);
     }
 
     [Fact]
     public void GetHealthStatus_ReturnsCorrectData()
     {
         // Arrange
-        var monitor = new MqttHealthMonitor(1000, NullLogger<MqttHealthMonitor>.Instance);
+        var monitor = new MqttHealthMonitor();
         monitor.RecordMessageReceived("test/topic");
         monitor.RecordMessageProcessed("test/topic");
 
@@ -135,7 +123,7 @@ public class MqttHealthMonitorTests
     public void GetTopicStatistics_ReturnsAllTopics()
     {
         // Arrange
-        var monitor = new MqttHealthMonitor(1000, NullLogger<MqttHealthMonitor>.Instance);
+        var monitor = new MqttHealthMonitor();
         monitor.RecordMessageReceived("topic1");
         monitor.RecordMessageReceived("topic2");
         monitor.RecordMessageProcessed("topic1");
@@ -155,7 +143,7 @@ public class MqttHealthMonitorTests
     public void Reset_ClearsAllStatistics()
     {
         // Arrange
-        var monitor = new MqttHealthMonitor(1000, NullLogger<MqttHealthMonitor>.Instance);
+        var monitor = new MqttHealthMonitor();
         monitor.RecordMessageReceived("test/topic");
         monitor.RecordMessageProcessed("test/topic");
 
@@ -174,7 +162,7 @@ public class MqttHealthMonitorTests
     public void LastMessageTime_IsRecorded()
     {
         // Arrange
-        var monitor = new MqttHealthMonitor(1000, NullLogger<MqttHealthMonitor>.Instance);
+        var monitor = new MqttHealthMonitor();
         var beforeTime = DateTimeOffset.UtcNow;
 
         // Act

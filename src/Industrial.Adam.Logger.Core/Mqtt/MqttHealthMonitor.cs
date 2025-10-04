@@ -29,6 +29,8 @@ public sealed class MqttHealthMonitor
     /// <param name="topic">The MQTT topic the message was received on.</param>
     public void RecordMessageReceived(string topic)
     {
+        ArgumentException.ThrowIfNullOrEmpty(topic);
+
         Interlocked.Increment(ref _messagesReceived);
 
         var stats = _topicStats.GetOrAdd(topic, _ => new TopicStatistics());

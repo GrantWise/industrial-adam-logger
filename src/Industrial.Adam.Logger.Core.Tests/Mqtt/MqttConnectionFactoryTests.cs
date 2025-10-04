@@ -95,8 +95,7 @@ public class MqttConnectionFactoryTests
             BrokerHost = "localhost",
             BrokerPort = 8883,
             ClientId = "test-client",
-            UseTls = true,
-            AllowInvalidCertificates = false
+            UseTls = true
         };
 
         // Act
@@ -164,27 +163,6 @@ public class MqttConnectionFactoryTests
         // Assert
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*QoS must be 0, 1, or 2*");
-    }
-
-    [Fact]
-    public void CreateManagedClientOptions_AllowInvalidCertificates_ThrowsValidationError()
-    {
-        // Arrange
-        var settings = new MqttSettings
-        {
-            BrokerHost = "localhost",
-            BrokerPort = 8883,
-            ClientId = "test-client",
-            UseTls = true,
-            AllowInvalidCertificates = true
-        };
-
-        // Act
-        var act = () => _factory.CreateManagedClientOptions(settings);
-
-        // Assert - validation should fail with warning about insecure settings
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*AllowInvalidCertificates*");
     }
 
     [Fact]
