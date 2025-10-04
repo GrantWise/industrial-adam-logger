@@ -1,11 +1,15 @@
 # Industrial ADAM Logger
 
-**Industrial-grade data acquisition service for ADAM-6000 series modules.**
-Modbus TCP → TimescaleDB pipeline with dead letter queue reliability for 24/7 manufacturing operations.
+**Industrial-grade data acquisition service for ADAM-6000 series modules and MQTT devices.**
+Modbus TCP + MQTT → TimescaleDB pipeline with dead letter queue reliability for 24/7 manufacturing operations.
 
 ## What It Does
 
-Connects to ADAM-6000 series industrial modules (digital counters and analog inputs) via Modbus TCP, reads data from configured channels, and persists time-series data to TimescaleDB with zero data loss guarantees.
+Connects to industrial devices via **Modbus TCP** or **MQTT**, reads data from configured channels/topics, and persists time-series data to TimescaleDB with zero data loss guarantees.
+
+**Supported Protocols:**
+- ✅ **Modbus TCP** - Direct polling of ADAM-6000 series hardware
+- ✅ **MQTT** - Event-driven data logging from any MQTT-enabled device
 
 ### Supported Hardware
 
@@ -25,15 +29,28 @@ Connects to ADAM-6000 series industrial modules (digital counters and analog inp
 
 ### Core Features
 
+**Data Acquisition:**
+- ✅ **Dual Protocol Support** - Modbus TCP (polling) + MQTT (event-driven)
 - ✅ **Multi-Model Support** - Digital counters + analog inputs (temperature, voltage, etc.)
-- ✅ **Modbus TCP Communication** - Robust device connectivity with automatic retry
-- ✅ **Concurrent Multi-Device Polling** - Poll multiple ADAM devices simultaneously
-- ✅ **Configuration-Driven** - Add new devices via JSON, no code changes needed
-- ✅ **TimescaleDB Integration** - Optimized time-series storage with hypertables
+- ✅ **Concurrent Multi-Device** - Poll/subscribe to multiple devices simultaneously
+- ✅ **MQTT Wildcards** - Topic patterns with `+` and `#` support
+- ✅ **Flexible Payloads** - JSON, Binary, CSV formats
+
+**Reliability:**
 - ✅ **Dead Letter Queue** - Zero data loss with automatic recovery
+- ✅ **Auto-Reconnect** - Handles network interruptions gracefully
+- ✅ **Quality of Service** - MQTT QoS 0/1/2 support
+- ✅ **Certificate Validation** - Production-grade TLS/SSL security
+
+**Data Processing:**
 - ✅ **Windowed Rate Calculation** - Smooth production rate metrics (for counters)
 - ✅ **Counter Overflow Detection** - Handles 16-bit and 32-bit counter wraparounds
 - ✅ **Data Quality Indicators** - Good, Degraded, Bad, Unavailable (21 CFR Part 11 compliant)
+- ✅ **Scale Factors** - Apply unit conversions automatically
+
+**Operations:**
+- ✅ **Configuration-Driven** - Add devices via JSON, no code changes needed
+- ✅ **TimescaleDB Integration** - Optimized time-series storage with hypertables
 - ✅ **REST API** - Query device status and historical data
 - ✅ **Health Monitoring** - Built-in health checks and diagnostics
 - ✅ **Device Simulators** - Test without physical hardware
@@ -77,10 +94,13 @@ dotnet run --project src/Industrial.Adam.Logger.WebApi
 
 ```
 ┌─────────────┐    Modbus TCP    ┌──────────────┐    SQL    ┌─────────────┐
-│ ADAM-6000   │─────────────────▶│ Logger       │──────────▶│ TimescaleDB │
-│ Devices     │                   │ Service      │           │             │
-│ (Digital/   │                   │              │           │             │
-│  Analog)    │                   │              │           │             │
+│ ADAM-6000   │─────────────────▶│              │──────────▶│             │
+│ Devices     │                   │              │           │             │
+└─────────────┘                   │              │           │             │
+                                  │   Logger     │           │ TimescaleDB │
+┌─────────────┐    MQTT Broker   │   Service    │           │             │
+│ MQTT        │─────────────────▶│              │           │             │
+│ Devices     │    (pub/sub)     │              │           │             │
 └─────────────┘                   └──────────────┘           └─────────────┘
                                         │
                                         ├─ Dead Letter Queue
@@ -92,7 +112,7 @@ dotnet run --project src/Industrial.Adam.Logger.WebApi
 ### Clean Architecture Layers
 - **Domain**: Core business logic and models
 - **Application**: Data processing and rate calculation
-- **Infrastructure**: TimescaleDB storage, Modbus communication
+- **Infrastructure**: TimescaleDB storage, Modbus/MQTT communication
 - **WebApi**: REST endpoints and health checks
 
 ## Configuration
@@ -148,6 +168,40 @@ Edit `src/Industrial.Adam.Logger.WebApi/appsettings.json`:
 - `ScaleFactor`: Multiply raw value (e.g., 0.1 to convert to decimal)
 - `Unit`: Measurement unit for display
 
+### MQTT Device Example
+
+```json
+{
+  "Mqtt": {
+    "BrokerHost": "localhost",
+    "BrokerPort": 1883,
+    "ClientId": "industrial-logger",
+    "QualityOfServiceLevel": 1
+  },
+  "MqttDevices": [
+    {
+      "DeviceId": "TEMP-SENSOR-01",
+      "Name": "Temperature Sensor",
+      "Topics": ["sensors/temperature", "sensors/+/temp"],
+      "Format": "Json",
+      "DataType": "Float32",
+      "ChannelJsonPath": "$.channel",
+      "ValueJsonPath": "$.temperature",
+      "Unit": "°C"
+    }
+  ]
+}
+```
+
+**MQTT Configuration Fields:**
+- `Topics`: Array of MQTT topics (supports `+` and `#` wildcards)
+- `Format`: `Json`, `Binary`, or `Csv`
+- `QosLevel`: Optional per-device QoS (0, 1, or 2)
+- `ChannelJsonPath`: JsonPath to channel number (for JSON format)
+- `ValueJsonPath`: JsonPath to numeric value (for JSON format)
+
+**📖 See [MQTT Guide](docs/mqtt-guide.md) for complete setup instructions**
+
 ## API Endpoints
 
 ### Health
@@ -165,10 +219,15 @@ Edit `src/Industrial.Adam.Logger.WebApi/appsettings.json`:
 - `GET /data/latest/{deviceId}` - Latest readings for specific device
 - `GET /data/stats` - Data collection statistics
 
+### MQTT
+- `GET /mqtt/health` - MQTT broker connection and message statistics
+- `GET /mqtt/devices` - List configured MQTT devices
+
 ## Additional Documentation
 
 See the `docs/` directory for detailed guides:
 - [Getting Started Guide](docs/getting-started.md) - Step-by-step setup
+- [MQTT Guide](docs/mqtt-guide.md) - **MQTT setup, configuration, and troubleshooting**
 - [Simulator Guide](docs/simulator-guide.md) - Testing without hardware
 - [E2E Testing Guide](docs/e2e-testing-guide.md) - Integration testing
 - [Development Guidelines](CLAUDE.md) - For contributors and AI assistants

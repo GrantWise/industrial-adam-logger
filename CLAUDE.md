@@ -4,13 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Industrial ADAM Logger** - Industrial-grade data acquisition service that reads data from ADAM-6000 series modules (digital counters and analog inputs) via Modbus TCP and persists time-series data to TimescaleDB with zero data loss guarantees.
+**Industrial ADAM Logger** - Industrial-grade data acquisition service that reads data from ADAM-6000 series modules (digital counters and analog inputs) via Modbus TCP **and any MQTT-enabled device** via MQTT broker, persisting time-series data to TimescaleDB with zero data loss guarantees.
 
-**Key Purpose:** Modbus TCP → TimescaleDB pipeline with dead letter queue reliability for 24/7 manufacturing operations.
+**Key Purpose:** Dual-protocol (Modbus TCP + MQTT) → TimescaleDB pipeline with dead letter queue reliability for 24/7 manufacturing operations.
+
+**Supported Protocols:**
+- **Modbus TCP**: Direct polling of ADAM-6000 hardware
+- **MQTT**: Event-driven pub/sub from any MQTT device (JSON, Binary, CSV payloads)
 
 **Supported Devices:**
 - Digital I/O: ADAM-6050, 6051, 6052, 6053, 6055, 6056
 - Analog Input: ADAM-6015, 6017, 6018, 6024
+- MQTT: Any device publishing to MQTT broker
 
 ## 1. Core Philosophy: Pragmatic Over Dogmatic
 
@@ -156,7 +161,10 @@ dotnet run --project src/Industrial.Adam.Logger.WebApi --environment Production
 cd docker
 docker-compose up -d timescaledb
 
-# Start everything (logger + database)
+# Start database + MQTT broker
+docker-compose up -d timescaledb mosquitto
+
+# Start everything (logger + database + MQTT)
 docker-compose up -d
 
 # Start with simulators for testing
@@ -167,6 +175,23 @@ docker-compose logs -f adam-logger
 
 # Stop all services
 docker-compose down
+```
+
+### MQTT Testing
+
+```bash
+# Install mosquitto clients
+sudo apt-get install mosquitto-clients
+
+# Subscribe to topics (monitoring)
+mosquitto_sub -h localhost -t "sensors/#" -v
+
+# Publish test message (JSON)
+mosquitto_pub -h localhost -t "sensors/temperature" \
+  -m '{"channel":0,"value":25.5}'
+
+# Test MQTT health endpoint
+curl http://localhost:5000/mqtt/health
 ```
 
 ### Simulators (No Hardware Required)
@@ -202,10 +227,13 @@ dotnet run --project src/Industrial.Adam.Logger.Benchmarks -c Release
 - `WindowedRateCalculator.cs` - Calculates production rate using sliding window
 - `CircularBuffer.cs` - Fixed-size buffer for windowed calculations
 
-**Infrastructure Layer** (`Industrial.Adam.Logger.Core/Storage/`, `Services/`)
+**Infrastructure Layer** (`Industrial.Adam.Logger.Core/Storage/`, `Services/`, `Mqtt/`)
 - `TimescaleStorage.cs` - TimescaleDB persistence with batching
 - `DeadLetterQueue.cs` - Ensures zero data loss on storage failures
-- `AdamLoggerService.cs` - Main background service orchestrating polling
+- `AdamLoggerService.cs` - Main background service orchestrating Modbus polling
+- `MqttDataLoggerService.cs` - MQTT subscriber service with auto-reconnect
+- `MqttMessageProcessor.cs` - Processes MQTT payloads (JSON/Binary/CSV)
+- `TopicSubscriptionManager.cs` - Manages topic-to-device mapping with wildcards
 
 **Presentation Layer** (`Industrial.Adam.Logger.WebApi/`)
 - REST API endpoints for device status, health, and data queries
@@ -214,11 +242,13 @@ dotnet run --project src/Industrial.Adam.Logger.Benchmarks -c Release
 
 ### Key Design Patterns
 
-- **Background Service Pattern**: `AdamLoggerService` runs as hosted service
-- **Dead Letter Queue**: Failed database writes go to DLQ for retry
+- **Dual Background Services**: `AdamLoggerService` (Modbus polling) + `MqttDataLoggerService` (MQTT pub/sub)
+- **Dead Letter Queue**: Failed database writes go to DLQ for retry (both protocols)
 - **Batching**: Readings batched before database insert (configurable batch size/timeout)
 - **Sliding Window**: Rate calculation uses circular buffer for smooth metrics
 - **Overflow Detection**: Handles 16-bit and 32-bit counter wraparounds
+- **Topic-Device Mapping**: Wildcard pattern matching (`+`, `#`) for flexible topic subscriptions
+- **Auto-Reconnect**: MQTT client automatically reconnects with configurable delay
 
 ### Configuration Structure
 
@@ -227,7 +257,9 @@ All configuration in `appsettings.json`:
 ```json
 {
   "AdamLogger": {
-    "Devices": [/* Device configs */],
+    "Devices": [/* Modbus device configs */],
+    "Mqtt": {/* MQTT broker settings */},
+    "MqttDevices": [/* MQTT device configs */],
     "TimescaleDb": {/* DB config */}
   },
   "Jwt": {/* JWT settings */},
@@ -235,11 +267,27 @@ All configuration in `appsettings.json`:
 }
 ```
 
-**Important**: Device configuration includes:
+**Modbus Device Configuration:**
 - `DeviceId`, `IpAddress`, `Port` - Modbus connection
 - `PollIntervalMs` - How often to poll (default 1000ms)
 - `Channels[]` - Counter channels to read
 - `StartRegister`, `RegisterCount` - Modbus register mapping
+
+**MQTT Configuration:**
+- `BrokerHost`, `BrokerPort` - MQTT broker connection
+- `ClientId`, `Username`, `Password` - Authentication
+- `QualityOfServiceLevel` - Global QoS (0/1/2)
+- `UseTls`, `AllowInvalidCertificates` - Security settings
+- `ReconnectDelaySeconds` - Auto-reconnect delay
+
+**MQTT Device Configuration:**
+- `DeviceId`, `Topics[]` - Device ID and MQTT topics (supports `+` and `#` wildcards)
+- `Format` - Payload format (Json, Binary, Csv)
+- `DataType` - Data type (UInt32, Int16, UInt16, Float32, Float64)
+- `ChannelJsonPath`, `ValueJsonPath` - JsonPath for field extraction (JSON format)
+- `ScaleFactor`, `Unit` - Value transformation and display
+
+**See `docs/mqtt-guide.md` for complete MQTT setup and configuration details.**
 
 ## 8. Testing Approach
 
@@ -287,6 +335,8 @@ public void DataProcessor_Should_DetectOverflow()
 - **.NET 9** with C# 13
 - **TimescaleDB** (PostgreSQL + time-series)
 - **NModbus** - Modbus TCP client
+- **MQTTnet 4.3.7.1207** - MQTT v4 client library
+- **Newtonsoft.Json.JsonPath** - JsonPath parsing for MQTT payloads
 - **Polly** - Retry policies
 - **Npgsql** - PostgreSQL driver
 - **xUnit** - Testing framework
@@ -319,6 +369,10 @@ Base URL: `http://localhost:5000`
 - `GET /data/latest` - Latest readings from all devices
 - `GET /data/latest/{deviceId}` - Latest readings for specific device
 - `GET /data/stats` - Data collection statistics
+
+### MQTT Endpoints
+- `GET /mqtt/health` - MQTT broker connection and message statistics
+- `GET /mqtt/devices` - List configured MQTT devices
 
 Swagger UI: `http://localhost:5000/swagger`
 
@@ -368,6 +422,49 @@ Swagger UI: `http://localhost:5000/swagger`
   "Unit": "°C"
 }
 ```
+
+### MQTT Devices
+
+**Protocol**: MQTT v4 (via MQTT broker like Mosquitto or EMQX)
+
+**Supported Payload Formats:**
+- **JSON**: Most flexible - uses JsonPath to extract channel and value
+- **Binary**: Most compact - `[1 byte channel][N bytes value]`
+- **CSV**: Simple text - `channel,value,timestamp`
+
+**Data Types:**
+- `UInt32`, `Int16`, `UInt16`, `Float32`, `Float64`
+
+**Configuration Example (JSON):**
+```json
+{
+  "DeviceId": "TEMP-SENSOR-01",
+  "Topics": ["sensors/temperature", "sensors/+/temp"],
+  "Format": "Json",
+  "DataType": "Float32",
+  "ChannelJsonPath": "$.channel",
+  "ValueJsonPath": "$.temperature",
+  "Unit": "°C",
+  "ScaleFactor": 1.0
+}
+```
+
+**Configuration Example (Binary):**
+```json
+{
+  "DeviceId": "COUNTER-01",
+  "Topics": ["counters/production"],
+  "Format": "Binary",
+  "DataType": "UInt32",
+  "QosLevel": 1
+}
+```
+
+**Topic Wildcards:**
+- `+` - Single-level wildcard (e.g., `sensors/+/temperature`)
+- `#` - Multi-level wildcard (e.g., `sensors/#`)
+
+**See `docs/mqtt-guide.md` for complete setup, broker configuration, and troubleshooting.**
 
 ### Simulator Configuration
 
